@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI):
         await task
 
 
-app = FastAPI(title="Договор-рентген", lifespan=lifespan)
+app = FastAPI(title="Документ-хелпер", lifespan=lifespan)
 
 # Статика может жить на GitHub Pages, а API — отдельно. Пускаем только свои адреса:
 # API тратит деньги на каждый разбор, открывать его всему интернету незачем.
@@ -94,7 +94,7 @@ def _user(init_data: str) -> dict:
         detail = (
             "Мини-апп открыт слишком давно — закрой и открой заново."
             if "протухли" in str(e)
-            else "Открой рентген через бота — так я знаю, что это ты."
+            else "Открой хелпер через бота — так я знаю, что это ты."
         )
         raise HTTPException(401, detail) from e
 
