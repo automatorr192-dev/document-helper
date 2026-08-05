@@ -1,0 +1,10 @@
+meta:
+  environment: python
+  toolchain:
+    name: pip
+    version: 3.11
+
+run:
+  persistenceMount: /data
+  containerPort: 80
+  cmd: python -m uvicorn main:app --host 0.0.0.0 --port 80

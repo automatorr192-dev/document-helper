@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - data:/data
+    ports:
+      - "8000:80"
+
+volumes:
+  data:

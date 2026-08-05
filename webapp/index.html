@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Договор-рентген</title>
+<meta name="theme-color" content="#0e1621">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="config.js"></script>
+<style>
+  :root{
+    --bg: var(--tg-theme-bg-color, #0e1621);
+    --surface: var(--tg-theme-secondary-bg-color, #17212b);
+    --ink: var(--tg-theme-text-color, #f2f5f7);
+    --muted: var(--tg-theme-hint-color, #8b9aa8);
+    --link: var(--tg-theme-link-color, #62b8f0);
+    --btn: var(--tg-theme-button-color, #3d8fd6);
+    --btn-ink: var(--tg-theme-button-text-color, #ffffff);
+
+    --beam: #7fe3ff;
+    --red: #ff6b6b;
+    --amber: #ffb454;
+    --green: #4ecb71;
+
+    --pad: 18px;
+    --radius: 16px;
+    --spring: cubic-bezier(.22,1,.36,1);
+    --snap: cubic-bezier(.2,.8,.2,1);
+
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  *{ box-sizing: border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  button{ font: inherit; color: inherit; }
+
+  /* Селекторы по id: правило видимости должно быть той же специфичности, что и
+     раскладка экрана, иначе экран выбора не прячется и документ уезжает вниз. */
+  #pick, #doc{ display:none; }
+  #doc.on{ display:block; }
+  #pick.on{
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+  }
+
+  /* ---------- Экран 1: выбор договора ---------- */
+
+  #pick{
+    min-height: 100svh;
+    padding: calc(var(--safe-top) + 32px) var(--pad) calc(var(--safe-bottom) + 28px);
+    text-align:center; gap: 6px;
+  }
+  .glyph{
+    width: 92px; height: 92px; margin-bottom: 22px;
+    color: var(--beam);
+    opacity:0; transform: translateY(14px);
+    animation: rise .7s var(--spring) .05s forwards;
+  }
+  .glyph .sweep{
+    animation: sweep 3.4s var(--snap) infinite;
+    transform-origin: center;
+  }
+  h1{
+    margin:0; font-size: 25px; line-height:1.2; font-weight: 700; letter-spacing:-.02em;
+    opacity:0; transform: translateY(14px); animation: rise .7s var(--spring) .14s forwards;
+  }
+  .lede{
+    margin: 10px 0 0; max-width: 30ch; color: var(--muted); font-size: 15px;
+    opacity:0; transform: translateY(14px); animation: rise .7s var(--spring) .22s forwards;
+  }
+  .pick-cta{
+    margin-top: 30px; width:100%; max-width: 340px;
+    opacity:0; transform: translateY(14px); animation: rise .7s var(--spring) .3s forwards;
+  }
+  .btn{
+    display:flex; align-items:center; justify-content:center; gap:9px;
+    width:100%; min-height: 52px; padding: 0 22px;
+    background: var(--btn); color: var(--btn-ink);
+    border: 0; border-radius: 14px; font-size: 16px; font-weight: 600;
+    cursor: pointer; transition: transform .18s var(--snap), opacity .18s var(--snap);
+  }
+  .btn:active{ transform: scale(.97); }
+  .btn[disabled]{ opacity:.55; }
+  .fineprint{
+    margin-top: 16px; color: var(--muted); font-size: 12.5px; line-height:1.45; max-width: 34ch;
+    opacity:0; animation: rise .7s var(--spring) .38s forwards;
+  }
+  #file{ position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+
+  .notice{
+    margin-top: 20px; max-width: 340px; width:100%;
+    padding: 13px 16px; border-radius: 13px;
+    background: color-mix(in srgb, var(--red) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--red) 34%, transparent);
+    color: var(--ink); font-size: 14px; line-height:1.45; text-align:left;
+  }
+  .notice:empty{ display:none; }
+
+  /* ---------- Экран 2: документ ---------- */
+
+  .verdict{
+    position: sticky; top:0; z-index: 20;
+    padding: calc(var(--safe-top) + 14px) var(--pad) 13px;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
+  }
+  .verdict h2{
+    margin:0; font-size: 18px; font-weight: 700; letter-spacing:-.01em;
+    display:flex; align-items:center; gap: 9px;
+  }
+  .verdict p{ margin: 5px 0 0; color: var(--muted); font-size: 13.5px; line-height:1.45; }
+  .pulse{
+    width: 8px; height: 8px; border-radius: 50%; background: var(--beam); flex: none;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .pulse.done{ animation: none; background: var(--green); }
+  .pulse.alarm{ animation: none; background: var(--red); }
+
+  .paper{
+    position: relative;
+    margin: 14px var(--pad) 0;
+    padding: 22px 20px;
+    background: var(--surface);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  #doctext{
+    margin:0;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 15.5px; line-height: 1.72;
+    white-space: pre-wrap; word-wrap: break-word;
+  }
+
+  /* Луч рентгена — единственный «вау»-эффект. Идёт по реальному тексту, не по пустоте.
+     Привязан к экрану, а не к высоте документа: иначе на длинном договоре он
+     проскакивает видимую область за доли секунды и его просто не видно. */
+  .beam{
+    position: fixed; left:0; right:0; top:0; height: 190px; z-index: 10;
+    pointer-events:none; opacity: 0;
+    /* Без mix-blend-mode: screen на светлой теме Telegram даёт белое на белом,
+       и луча просто нет. Обычная прозрачность читается на обеих темах. */
+    background: linear-gradient(to bottom,
+      transparent 0%,
+      color-mix(in srgb, var(--beam) 10%, transparent) 62%,
+      color-mix(in srgb, var(--beam) 34%, transparent) 92%,
+      color-mix(in srgb, var(--beam) 85%, transparent) 100%);
+  }
+  .paper.scanning .beam{ opacity:1; animation: scan 2.6s cubic-bezier(.6,0,.4,1) infinite; }
+
+  mark.hit{
+    background: transparent; color: inherit;
+    border-radius: 3px; padding: 1px 0;
+    box-shadow: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color .5s var(--snap), box-shadow .5s var(--snap);
+  }
+  mark.hit.lit{ background: var(--tint); box-shadow: 0 1px 0 0 var(--line), 0 0 0 3px var(--tint); }
+  mark.hit:active{ transform: none; opacity:.72; }
+  mark.hit.red   { --tint: color-mix(in srgb, var(--red) 26%, transparent);   --line: var(--red); }
+  mark.hit.yellow{ --tint: color-mix(in srgb, var(--amber) 24%, transparent); --line: var(--amber); }
+  mark.hit.green { --tint: color-mix(in srgb, var(--green) 20%, transparent); --line: var(--green); }
+
+  .after{ padding: 0 var(--pad) calc(var(--safe-bottom) + 90px); }
+  .actions{
+    margin-top: 16px; padding: 18px 20px;
+    background: var(--surface); border-radius: var(--radius);
+  }
+  .actions h3{ margin:0 0 12px; font-size: 15px; font-weight: 700; }
+  .actions ol{ margin:0; padding-left: 20px; }
+  .actions li{ margin: 9px 0; line-height: 1.5; }
+  .disclaimer{
+    margin: 16px 2px 0; color: var(--muted); font-size: 12.5px; line-height: 1.5;
+  }
+
+  /* ---------- Шторка находки ---------- */
+
+  .scrim{
+    position: fixed; inset:0; z-index: 40;
+    background: rgba(0,0,0,.5);
+    opacity:0; pointer-events:none; transition: opacity .3s var(--snap);
+  }
+  .scrim.on{ opacity:1; pointer-events:auto; }
+  .sheet{
+    position: fixed; left:0; right:0; bottom:0; z-index: 50;
+    max-height: 78svh; overflow-y: auto; overscroll-behavior: contain;
+    padding: 10px var(--pad) calc(var(--safe-bottom) + 26px);
+    background: var(--surface);
+    border-radius: 20px 20px 0 0;
+    transform: translateY(101%);
+    /* visibility в переходе: закрытая шторка не должна ловить фокус с клавиатуры. */
+    visibility: hidden;
+    transition: transform .42s var(--spring), visibility 0s linear .42s;
+  }
+  .sheet.on{ transform: translateY(0); visibility: visible; transition-delay: 0s; }
+
+  :focus-visible{ outline: 2px solid var(--beam); outline-offset: 2px; border-radius: 4px; }
+  .grip{
+    width: 38px; height: 4px; border-radius: 2px; margin: 0 auto 16px;
+    background: color-mix(in srgb, var(--muted) 45%, transparent);
+  }
+  .tag{
+    display:inline-flex; align-items:center; gap:7px;
+    font-size: 12.5px; font-weight: 600; letter-spacing:.02em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .dot{ width:7px; height:7px; border-radius:50%; background: currentColor; }
+  .sheet h3{ margin: 11px 0 0; font-size: 19px; line-height:1.28; letter-spacing:-.01em; }
+  .quote{
+    margin: 15px 0 0; padding: 14px 16px;
+    background: var(--tint, color-mix(in srgb, var(--muted) 14%, transparent));
+    border-radius: 12px;
+    font-family: Georgia, "Times New Roman", serif; font-size: 14.5px; line-height:1.6;
+    color: var(--ink);
+  }
+  .plain{ margin: 15px 0 0; font-size: 15px; line-height:1.6; }
+  .article{ margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+
+  /* ---------- Браузерный фолбэк ---------- */
+
+  body.no-tg .tg-only{ display:none; }
+  .browser-note{ display:none; }
+  body.no-tg .browser-note{ display:block; }
+
+  @keyframes rise{ to{ opacity:1; transform:none; } }
+  @keyframes scan{
+    0%{ transform: translateY(-190px); }
+    100%{ transform: translateY(100svh); }
+  }
+  @keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:.28; } }
+  @keyframes sweep{
+    0%, 100%{ transform: translateY(-16px); opacity:0; }
+    18%{ opacity:1; }
+    72%{ opacity:1; }
+    82%, 100%{ transform: translateY(16px); opacity:0; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *, *::before, *::after{
+      animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+    .glyph, h1, .lede, .pick-cta, .fineprint{ opacity:1; transform:none; }
+    .paper.scanning .beam{ opacity:.5; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Экран 1 -->
+<section id="pick" class="stage on">
+  <svg class="glyph" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+    <rect x="14" y="6" width="36" height="52" rx="4" stroke="currentColor" stroke-width="2.5" opacity=".45"/>
+    <g class="sweep">
+      <path d="M20 20h24M20 28h24M20 36h16" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+    </g>
+    <path d="M6 32h52" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+  </svg>
+
+  <h1>Договор-рентген</h1>
+  <p class="lede">Покажу, какие пункты договора могут стоить тебе денег. Займёт минуту.</p>
+
+  <div class="pick-cta">
+    <input type="file" id="file" accept="application/pdf,.pdf">
+    <button class="btn" id="choose" type="button">Выбрать договор</button>
+  </div>
+
+  <p class="fineprint">PDF с текстом, до 10 МБ. Скан-картинку пока не читаю.</p>
+  <p class="fineprint browser-note">Это страница мини-аппа. Чтобы разобрать договор, открой рентген через бота в Telegram.</p>
+
+  <div class="notice" id="notice" role="alert"></div>
+</section>
+
+<!-- Экран 2 -->
+<section id="doc" class="stage">
+  <header class="verdict" aria-live="polite">
+    <h2><span class="pulse" id="pulse" aria-hidden="true"></span><span id="verdict">Читаю документ…</span></h2>
+    <p id="summary">Смотрю, что тут написано мелким шрифтом.</p>
+  </header>
+
+  <div class="paper" id="paper">
+    <article id="doctext" aria-label="Текст договора"></article>
+    <div class="beam" aria-hidden="true"></div>
+  </div>
+
+  <div class="after">
+    <div class="actions" id="actions" hidden>
+      <h3>Перед подписанием</h3>
+      <ol id="actionlist"></ol>
+    </div>
+    <p class="disclaimer">Это ИИ-разбор, а не юридическая консультация. Важное перед подписью сверь с юристом.</p>
+    <div class="pick-cta browser-note" style="animation:none;opacity:1">
+      <button class="btn" id="again2" type="button">Проверить другой договор</button>
+    </div>
+  </div>
+</section>
+
+<div class="scrim" id="scrim"></div>
+<aside class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <div class="grip"></div>
+  <span class="tag" id="sheet-tag"><span class="dot"></span><span id="sheet-level"></span></span>
+  <h3 id="sheet-title"></h3>
+  <blockquote class="quote" id="sheet-quote"></blockquote>
+  <p class="plain" id="sheet-plain"></p>
+  <p class="article" id="sheet-article"></p>
+</aside>
+
+<script>
+(function(){
+  "use strict";
+
+  // Вне Telegram SDK всё равно отдаёт объект WebApp, но с platform === 'unknown'.
+  const WA = window.Telegram && window.Telegram.WebApp;
+  const TG = WA && WA.platform !== 'unknown' ? WA : null;
+  if (!TG) document.body.classList.add('no-tg');
+
+  const haptic = (kind, style) => {
+    try {
+      if (!TG) return;
+      if (kind === 'impact') TG.HapticFeedback.impactOccurred(style || 'light');
+      else TG.HapticFeedback.notificationOccurred(style || 'success');
+    } catch (e) { /* в браузере haptic нет — это норма */ }
+  };
+
+  if (TG) {
+    try { TG.ready(); TG.expand(); } catch (e) {}
+    try { TG.setHeaderColor('bg_color'); TG.setBackgroundColor('bg_color'); } catch (e) {}
+  }
+
+  const $ = (id) => document.getElementById(id);
+  const pick = $('pick'), doc = $('doc'), paper = $('paper');
+  const notice = $('notice'), file = $('file');
+  const scrim = $('scrim'), sheet = $('sheet');
+
+  const LEVELS = {
+    red:    { word: 'Опасно', color: 'var(--red)',   tint: 'color-mix(in srgb, var(--red) 18%, transparent)' },
+    yellow: { word: 'Спорно', color: 'var(--amber)', tint: 'color-mix(in srgb, var(--amber) 18%, transparent)' },
+    green:  { word: 'Всё ок', color: 'var(--green)', tint: 'color-mix(in srgb, var(--green) 16%, transparent)' }
+  };
+
+  let findings = [];
+
+  // --- Навигация -----------------------------------------------------------
+
+  function show(stage){
+    pick.classList.toggle('on', stage === 'pick');
+    doc.classList.toggle('on', stage === 'doc');
+    window.scrollTo(0, 0);
+  }
+
+  function backToPick(){
+    closeSheet();
+    show('pick');
+    file.value = '';
+    setMainButton(null);
+    hideBack();
+  }
+
+  function showBack(handler){
+    if (!TG) return;
+    try {
+      TG.BackButton.offClick(backHandler);
+      backHandler = handler;
+      TG.BackButton.onClick(backHandler);
+      TG.BackButton.show();
+    } catch (e) {}
+  }
+  function hideBack(){
+    if (!TG) return;
+    try { TG.BackButton.offClick(backHandler); TG.BackButton.hide(); } catch (e) {}
+  }
+  let backHandler = function(){};
+
+  let mainHandler = null;
+  function setMainButton(text, handler){
+    if (!TG) return;
+    try {
+      if (mainHandler) { TG.MainButton.offClick(mainHandler); mainHandler = null; }
+      if (!text) { TG.MainButton.hide(); return; }
+      mainHandler = handler;
+      TG.MainButton.setText(text);
+      TG.MainButton.onClick(mainHandler);
+      TG.MainButton.show();
+    } catch (e) {}
+  }
+
+  // --- Шторка --------------------------------------------------------------
+
+  function openSheet(f){
+    const level = LEVELS[f.severity] || LEVELS.yellow;
+    const tag = $('sheet-tag');
+    tag.style.color = level.color;
+    $('sheet-level').textContent = level.word;
+    $('sheet-title').textContent = f.title;
+    const quote = $('sheet-quote');
+    quote.textContent = f.quote;
+    quote.style.setProperty('--tint', level.tint);
+    $('sheet-plain').textContent = f.plain;
+    $('sheet-article').textContent = f.article || '';
+    $('sheet-article').hidden = !f.article;
+
+    scrim.classList.add('on');
+    sheet.classList.add('on');
+    haptic('impact', 'light');
+    showBack(closeSheet);
+  }
+
+  function closeSheet(){
+    scrim.classList.remove('on');
+    sheet.classList.remove('on');
+    if (doc.classList.contains('on')) showBack(backToPick); else hideBack();
+  }
+
+  scrim.addEventListener('click', closeSheet);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && sheet.classList.contains('on')) closeSheet();
+  });
+
+  // --- Отрисовка документа -------------------------------------------------
+
+  // Текст договора вставляется только через textContent: внутри PDF может лежать
+  // что угодно, включая разметку, и превращать её в DOM нельзя.
+  function renderDocument(text, hits){
+    const out = $('doctext');
+    out.textContent = '';
+    let cursor = 0;
+
+    (hits || []).forEach((f, i) => {
+      if (f.start < cursor || f.end <= f.start || f.end > text.length) return;
+      out.appendChild(document.createTextNode(text.slice(cursor, f.start)));
+
+      const mark = document.createElement('mark');
+      mark.className = 'hit ' + (LEVELS[f.severity] ? f.severity : 'yellow');
+      mark.textContent = text.slice(f.start, f.end);
+      mark.tabIndex = 0;
+      mark.setAttribute('role', 'button');
+      mark.setAttribute('aria-label', (LEVELS[f.severity] || LEVELS.yellow).word + ': ' + f.title);
+      mark.addEventListener('click', () => openSheet(f));
+      mark.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSheet(f); }
+      });
+      out.appendChild(mark);
+
+      cursor = f.end;
+    });
+
+    out.appendChild(document.createTextNode(text.slice(cursor)));
+  }
+
+  // Находки загораются не разом, а по мере прохода луча сверху вниз —
+  // видно, что документ действительно просветили.
+  function igniteInWake(){
+    const marks = Array.from(document.querySelectorAll('mark.hit'));
+    if (!marks.length) return;
+    const paperTop = paper.getBoundingClientRect().top + window.scrollY;
+    const height = Math.max(paper.offsetHeight, 1);
+    const sweep = 1100;
+
+    marks.forEach((mark) => {
+      const y = mark.getBoundingClientRect().top + window.scrollY - paperTop;
+      mark.style.transitionDelay = Math.round((y / height) * sweep) + 'ms';
+      requestAnimationFrame(() => mark.classList.add('lit'));
+    });
+  }
+
+  // --- Запросы -------------------------------------------------------------
+
+  const initData = (TG && TG.initData) || '';
+
+  // Статика может лежать отдельно от бэкенда (GitHub Pages), поэтому адрес API вынесен.
+  const API = String(window.API_BASE || '').replace(/\/+$/, '');
+  const NO_BACKEND = !API && /github\.io$/.test(location.hostname);
+
+  async function post(url, options){
+    const response = await fetch(API + url, options);
+    let body = null;
+    try { body = await response.json(); } catch (e) {}
+    if (!response.ok) {
+      throw new Error((body && body.detail) || 'Что-то пошло не так. Попробуй ещё раз.');
+    }
+    return body;
+  }
+
+  async function run(chosen){
+    notice.textContent = '';
+
+    if (NO_BACKEND) {
+      notice.textContent = 'Интерфейс на месте, а разбор считает сервер — он сейчас не подключён. '
+        + 'Адрес бэкенда прописывается в config.js.';
+      haptic('notify', 'error');
+      return;
+    }
+
+    const form = new FormData();
+    form.append('file', chosen);
+    form.append('init_data', initData);
+
+    let text;
+    try {
+      const extracted = await post('/api/extract', { method: 'POST', body: form });
+      text = extracted.text || '';
+    } catch (e) {
+      notice.textContent = e.message;
+      haptic('notify', 'error');
+      return;
+    }
+
+    // Документ на экране сразу — луч идёт по нему, пока думает модель.
+    renderDocument(text, []);
+    $('verdict').textContent = 'Просвечиваю…';
+    $('summary').textContent = 'Ищу кабальные пункты, скрытые платежи и штрафы.';
+    $('pulse').className = 'pulse';
+    $('actions').hidden = true;
+    paper.classList.add('scanning');
+    show('doc');
+    showBack(backToPick);
+
+    try {
+      const report = await post('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ init_data: initData, text: text })
+      });
+
+      paper.classList.remove('scanning');
+      findings = report.findings || [];
+      renderDocument(text, findings);
+      igniteInWake();
+
+      $('verdict').textContent = report.verdict;
+      $('summary').textContent = report.summary;
+      $('pulse').className = 'pulse ' + (/критичн/.test(report.verdict) ? 'alarm' : 'done');
+
+      if (report.actions && report.actions.length) {
+        const list = $('actionlist');
+        list.textContent = '';
+        report.actions.forEach((step) => {
+          const li = document.createElement('li');
+          li.textContent = step;
+          list.appendChild(li);
+        });
+        $('actions').hidden = false;
+      }
+
+      haptic('notify', findings.some((f) => f.severity === 'red') ? 'warning' : 'success');
+      setMainButton('Проверить другой договор', backToPick);
+    } catch (e) {
+      paper.classList.remove('scanning');
+      backToPick();
+      notice.textContent = e.message;
+      haptic('notify', 'error');
+    }
+  }
+
+  // --- Выбор файла ---------------------------------------------------------
+
+  $('choose').addEventListener('click', () => { haptic('impact', 'light'); file.click(); });
+  $('again2').addEventListener('click', backToPick);
+
+  file.addEventListener('change', () => {
+    const chosen = file.files && file.files[0];
+    if (chosen) run(chosen);
+  });
+})();
+</script>
+</body>
+</html>
