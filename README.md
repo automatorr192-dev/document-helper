@@ -1,5 +1,7 @@
 # Договор-рентген
 
+[![CI](https://github.com/automatorr192-dev/dogovor-rentgen/actions/workflows/ci.yml/badge.svg)](https://github.com/automatorr192-dev/dogovor-rentgen/actions/workflows/ci.yml)
+
 Показывает, какие пункты договора могут стоить тебе денег. Бросаешь PDF — получаешь разбор:
 что опасно, что спорно, что нормально, и что исправить до подписи.
 
