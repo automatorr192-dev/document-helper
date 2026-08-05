@@ -1,9 +1,12 @@
 name: Pages
 
+# Запускается только руками. Автозапуск по пушу включим, когда решим публиковать
+# мини-апп: до этого Pages в репозитории выключен и сборка просто падает.
+# Чтобы включить: settings -> Pages -> Source: GitHub Actions, потом вернуть сюда
+#   push:
+#     branches: [main]
+#     paths: ["webapp/**", ".github/workflows/pages.yml"]
 on:
-  push:
-    branches: [main]
-    paths: ["webapp/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
