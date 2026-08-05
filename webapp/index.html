@@ -49,6 +49,9 @@
   #pick.on{
     display:flex; flex-direction:column; align-items:center; justify-content:center;
   }
+  /* В Telegram Desktop мини-апп бывает широким, а строка юридического текста
+     длиннее ~75 знаков уже нечитаема. Держим колонку. */
+  #pick, #doc, .sheet{ max-width: 520px; margin-inline: auto; }
 
   /* ---------- Экран 1: выбор договора ---------- */
 

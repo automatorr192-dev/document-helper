@@ -2,16 +2,19 @@ import asyncio
 import logging
 import os
 import tempfile
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BotCommand,
     CallbackQuery,
+    ErrorEvent,
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -23,14 +26,19 @@ from dotenv import load_dotenv
 
 import analyzer
 import generator
+import quota
 from extract import ScannedPdfError, image_data_url, pdf_text
 from prompts import DISCLAIMER, DOC_TYPES
 from schema import Report
+from storage import FileStorage
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
-dp = Dispatcher()
+dp = Dispatcher(storage=FileStorage())
+
+MAX_DOC_BYTES = 10 * 1024 * 1024
+DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", 5))
 
 WELCOME = (
     "🔍 <b>Договор-рентген</b>\n\n"
@@ -149,6 +157,16 @@ def render(report: Report) -> str:
     return "\n".join(lines)
 
 
+async def _quota(message: Message, bucket: str) -> bool:
+    """Разбор и генерация стоят живых денег, а чат открыт всему интернету."""
+    try:
+        quota.take(message.from_user.id, DAILY_LIMIT, bucket)
+        return True
+    except quota.Exhausted as e:
+        await message.answer(f"На сегодня хватит — {e.limit} разборов в сутки. Возвращайся завтра.")
+        return False
+
+
 async def _run_analysis(message: Message, coro):
     async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
         try:
@@ -164,9 +182,15 @@ async def _run_analysis(message: Message, coro):
 
 @dp.message(Flow.awaiting_doc, F.document)
 async def analyze_document(message: Message):
+    if (message.document.file_size or 0) > MAX_DOC_BYTES:
+        await message.answer("Файл больше 10 МБ. Пришли договор одним PDF поменьше.")
+        return
+    if not await _quota(message, "analyze"):
+        return
     path = await _download(message.bot, message.document.file_id, ".pdf")
     try:
-        text = pdf_text(path)
+        # pdfplumber синхронный: в event loop он вешает и бота, и веб-часть того же процесса.
+        text = await asyncio.to_thread(pdf_text, path)
     except ScannedPdfError:
         await message.answer("Не смог вытащить текст (похоже на скан). Пришли фото страниц.")
         return
@@ -180,6 +204,8 @@ async def analyze_document(message: Message):
 
 @dp.message(Flow.awaiting_doc, F.photo)
 async def analyze_photo(message: Message):
+    if not await _quota(message, "analyze"):
+        return
     path = await _download(message.bot, message.photo[-1].file_id, ".jpg")
     try:
         data_url = image_data_url(path)
@@ -193,6 +219,8 @@ async def analyze_pasted(message: Message):
     if len(message.text) < 40:
         await message.answer("Маловато текста для разбора. Пришли договор целиком.")
         return
+    if not await _quota(message, "analyze"):
+        return
     await _run_analysis(message, analyzer.analyze(message.text))
 
 
@@ -202,6 +230,12 @@ async def analyze_pasted(message: Message):
 @dp.message(Flow.gen_brief, F.text)
 async def collect_brief(message: Message, state: FSMContext):
     data = await state.get_data()
+    if not data:
+        await message.answer("Я потерял нить разговора. Начнём заново: /start")
+        await state.clear()
+        return
+    if not await _quota(message, "generate"):
+        return
     brief = (data["brief"] + "\n" + message.text).strip()
     await state.update_data(brief=brief)
 
@@ -240,13 +274,34 @@ async def _download(bot: Bot, file_id: str, suffix: str) -> str:
     return tmp.name
 
 
+@dp.errors()
+async def on_error(event: ErrorEvent) -> bool:
+    """Ошибка в хендлере не должна ронять polling и не должна оставлять человека молча
+    смотреть в экран."""
+    logging.exception("ошибка в хендлере", exc_info=event.exception)
+    if isinstance(event.exception, TelegramForbiddenError):
+        return True
+    message = getattr(event.update, "message", None) or getattr(
+        getattr(event.update, "callback_query", None), "message", None
+    )
+    if isinstance(message, Message):
+        with suppress(TelegramAPIError):
+            await message.answer("Что-то сломалось на моей стороне. Попробуй ещё раз: /start")
+    return True
+
+
 async def main():
     bot = Bot(
         os.environ["TELEGRAM_BOT_TOKEN"],
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     await bot.set_my_commands([BotCommand(command="start", description="В меню")])
-    await dp.start_polling(bot)
+    try:
+        # drop_pending_updates: после долгого простоя Telegram отдаёт всё накопленное, и бот
+        # начинает отвечать на вчерашние нажатия. Заодно снимает чужой вебхук — иначе 409.
+        await dp.start_polling(bot, drop_pending_updates=True)
+    finally:
+        await bot.session.close()
 
 
 if __name__ == "__main__":

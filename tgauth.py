@@ -9,15 +9,21 @@
 import hashlib
 import hmac
 import json
+import os
 import time
 from urllib.parse import parse_qsl
+
+# Telegram выдаёт initData один раз при запуске мини-аппа и больше не обновляет. Сутки
+# жизни означают, что перехваченная подпись сутки открывает платный API; 15 минут — это
+# запас на «открыл, выбрал файл, загрузил», после чего мини-апп надо переоткрыть.
+MAX_AGE = int(os.environ.get("INITDATA_MAX_AGE", 15 * 60))
 
 
 class BadInitData(Exception):
     pass
 
 
-def check(init_data: str, bot_token: str, max_age: int = 24 * 3600) -> dict:
+def check(init_data: str, bot_token: str, max_age: int = MAX_AGE) -> dict:
     """Возвращает данные пользователя или падает. Никогда не доверять полю user без этого."""
     if not init_data:
         raise BadInitData("пусто")

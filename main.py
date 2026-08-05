@@ -2,9 +2,7 @@ import asyncio
 import logging
 import os
 import tempfile
-import time
-from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +12,7 @@ from pydantic import BaseModel
 
 import analyzer
 import bot as tg
+import quota
 import tgauth
 from extract import ScannedPdfError, pdf_text
 
@@ -24,6 +23,8 @@ WEBAPP = os.path.join(HERE, "webapp")
 MAX_PDF_BYTES = 10 * 1024 * 1024
 MAX_TEXT_CHARS = 60_000
 DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", 5))
+# Парсинг PDF не платный, но нагружает процессор — свой лимит, пошире.
+EXTRACT_LIMIT = int(os.environ.get("EXTRACT_LIMIT", 30))
 
 
 class AnalyzeIn(BaseModel):
@@ -31,28 +32,37 @@ class AnalyzeIn(BaseModel):
     text: str = ""
 
 
-_used: dict[int, list[float]] = defaultdict(list)
+def _take(user_id: int, limit: int, bucket: str) -> int:
+    try:
+        return quota.take(user_id, limit, bucket)
+    except quota.Exhausted as e:
+        raise HTTPException(429, f"На сегодня хватит — {e.limit} разборов в сутки.") from e
 
 
-def _take_quota(user_id: int) -> int:
-    """Разбор стоит ~8 ₽ живых денег, поэтому лимит на пользователя в сутки."""
-    now = time.time()
-    recent = [t for t in _used[user_id] if now - t < 24 * 3600]
-    if len(recent) >= DAILY_LIMIT:
-        _used[user_id] = recent
-        raise HTTPException(429, f"На сегодня хватит — {DAILY_LIMIT} разборов в сутки.")
-    recent.append(now)
-    _used[user_id] = recent
-    return DAILY_LIMIT - len(recent)
+async def _supervise_bot():
+    """Бот делит процесс с веб-приложением, поэтому его падение веб не роняет — и наоборот,
+    молча остаётся незамеченным. Логируем громко и поднимаем заново."""
+    while True:
+        try:
+            await tg.main()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("бот упал, перезапуск через 5 с")
+            await asyncio.sleep(5)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Бот живёт фоновой задачей внутри веб-приложения: в Amvera каждое приложение
     # тарифицируется отдельно, поэтому веб и бот делят один контейнер.
-    task = asyncio.create_task(tg.main())
+    task = asyncio.create_task(_supervise_bot())
     yield
     task.cancel()
+    # Дожидаемся отмены: без этого aiogram не успевает закрыть сессию и оборвать polling.
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 app = FastAPI(title="Договор-рентген", lifespan=lifespan)
@@ -81,13 +91,19 @@ def _user(init_data: str) -> dict:
     try:
         return tgauth.check(init_data, os.environ["TELEGRAM_BOT_TOKEN"])
     except tgauth.BadInitData as e:
-        raise HTTPException(401, "Открой рентген через бота — так я знаю, что это ты.") from e
+        detail = (
+            "Мини-апп открыт слишком давно — закрой и открой заново."
+            if "протухли" in str(e)
+            else "Открой рентген через бота — так я знаю, что это ты."
+        )
+        raise HTTPException(401, detail) from e
 
 
 @app.post("/api/extract")
 async def api_extract(file: UploadFile = File(...), init_data: str = Form("")):
     """Быстрый шаг: только текст из PDF. Мини-апп показывает договор, пока идёт разбор."""
-    _user(init_data)
+    user = _user(init_data)
+    _take(user.get("id", 0), EXTRACT_LIMIT, "extract")
 
     raw = await file.read()
     if len(raw) > MAX_PDF_BYTES:
@@ -97,7 +113,9 @@ async def api_extract(file: UploadFile = File(...), init_data: str = Form("")):
     tmp.write(raw)
     tmp.close()
     try:
-        text = pdf_text(tmp.name)
+        # pdfplumber синхронный и тяжёлый: в event loop он вешает и API, и бота в этом же
+        # процессе. Считаем в отдельном потоке.
+        text = await asyncio.to_thread(pdf_text, tmp.name)
     except ScannedPdfError as e:
         raise HTTPException(422, "Похоже на скан — текста внутри нет. OCR пока не умею.") from e
     except Exception as e:
@@ -115,7 +133,7 @@ async def api_analyze(body: AnalyzeIn):
     if len(text) < 200:
         raise HTTPException(422, "Маловато текста для разбора.")
 
-    left = _take_quota(user.get("id", 0))
+    left = _take(user.get("id", 0), DAILY_LIMIT, "analyze")
 
     try:
         report, replies = await analyzer.analyze(text[:MAX_TEXT_CHARS])
@@ -136,5 +154,16 @@ async def api_analyze(body: AnalyzeIn):
     )
 
 
+class NoCacheStatic(StaticFiles):
+    """Мини-апп кэшируется в WebView Telegram намертво, а способа сбросить этот кэш у
+    Telegram нет. no-cache не запрещает кэшировать — он требует сверить ETag перед показом,
+    поэтому новая версия доезжает сразу, а трафик почти не растёт."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 if os.path.isdir(WEBAPP):
-    app.mount("/", StaticFiles(directory=WEBAPP, html=True), name="webapp")
+    app.mount("/", NoCacheStatic(directory=WEBAPP, html=True), name="webapp")
