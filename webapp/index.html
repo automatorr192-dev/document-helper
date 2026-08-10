@@ -501,6 +501,56 @@
     return body;
   }
 
+  // Разбор потоком. Сервер шлёт события SSE: finding по одному, потом done.
+  // Если поток недоступен (старый прокси, отключённая буферизация), молча падаем
+  // на обычный запрос — продукт важнее эффекта.
+  async function analyze(text, onFinding){
+    const body = JSON.stringify({ init_data: initData, text: text });
+    const headers = { 'Content-Type': 'application/json' };
+
+    let response;
+    try {
+      response = await fetch(API + '/api/analyze/stream', { method: 'POST', headers, body });
+    } catch (e) {
+      return post('/api/analyze', { method: 'POST', headers, body });
+    }
+    if (!response.ok || !response.body) {
+      let detail = null;
+      try { detail = (await response.json()).detail; } catch (e) {}
+      if (detail) throw new Error(detail);
+      return post('/api/analyze', { method: 'POST', headers, body });
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let report = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let split;
+      while ((split = buffer.indexOf('\n\n')) !== -1) {
+        const raw = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+
+        const kind = (raw.match(/^event: (.+)$/m) || [])[1];
+        const payload = (raw.match(/^data: (.+)$/m) || [])[1];
+        if (!kind || !payload) continue;
+        const data = JSON.parse(payload);
+
+        if (kind === 'finding') onFinding(data);
+        else if (kind === 'done') report = data;
+        else if (kind === 'error') throw new Error(data.detail);
+      }
+    }
+
+    if (!report) throw new Error('Разбор оборвался. Попробуй ещё раз.');
+    return report;
+  }
+
   async function run(chosen){
     notice.textContent = '';
 
@@ -549,14 +599,17 @@
     showBack(backToPick);
 
     try {
-      const report = await post('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ init_data: initData, text: text })
+      const report = await analyze(text, (finding) => {
+        // Находка пришла раньше, чем модель дописала ответ: подсвечиваем сразу,
+        // иначе весь разбор загорается разом в конце и стриминг не виден.
+        findings = findings.concat([finding]);
+        renderDocument(text, findings);
+        document.querySelectorAll('mark.hit').forEach((m) => m.classList.add('lit'));
+        $('summary').textContent = 'Нашёл опасных пунктов: ' + findings.length;
       });
 
       paper.classList.remove('scanning');
-      findings = report.findings || [];
+      findings = report.findings || findings;
       renderDocument(text, findings);
       igniteInWake();
 

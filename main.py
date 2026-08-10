@@ -1,11 +1,12 @@
 import asyncio
+import json
 import os
 import tempfile
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -174,6 +175,51 @@ async def api_analyze(body: AnalyzeIn):
             "actions": report.actions,
             "left": left,
         }
+    )
+
+
+def _sse(kind: str, data: dict) -> str:
+    return f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.post("/api/analyze/stream")
+async def api_analyze_stream(body: AnalyzeIn):
+    """То же, что /api/analyze, но находки уезжают по одной, как только модель их дописала.
+
+    Ошибки после первого байта уже нельзя отдать кодом ответа — заголовки ушли. Поэтому
+    всё, что может упасть до старта потока, проверяется здесь, а остальное превращается
+    в событие error.
+    """
+    user = _user(body.init_data)
+    text = body.text.strip()
+    if len(text) < 200:
+        raise HTTPException(422, "Маловато текста для разбора.")
+
+    left = _take(user.get("id", 0), DAILY_LIMIT, "analyze")
+
+    async def events():
+        try:
+            async for event in analyzer.analyze_stream(text[:MAX_TEXT_CHARS]):
+                if event["type"] == "done":
+                    event["data"]["left"] = left
+                    log.info(
+                        "analyze.done",
+                        streaming=True,
+                        user_id=user.get("id"),
+                        findings=len(event["data"]["findings"]),
+                        cost_rub=event["data"]["cost_rub"],
+                        chars=len(text),
+                    )
+                yield _sse(event["type"], event["data"])
+        except Exception as e:
+            log.exception("analyze.stream_failed", user_id=user.get("id"))
+            yield _sse("error", {"detail": f"ИИ временно недоступен ({e}). Попробуй ещё раз."})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        # Без этого прокси буферизует ответ и складывает поток обратно в один кусок.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

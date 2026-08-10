@@ -66,6 +66,57 @@ def _get_client() -> AsyncOpenAI:
     return _client
 
 
+async def stream(system: str, content, models: list[str], max_tokens: int = 2500):
+    """То же, что chat, но отдаёт куски ответа по мере их появления.
+
+    Генератор выдаёт строки, а последним значением — Reply с итогом и стоимостью.
+    Фолбэк по моделям работает только до первого куска: если поток уже пошёл и оборвался
+    на середине, начинать заново поздно и незачем.
+    """
+    client = _get_client()
+    last_error = "нет ответа"
+    for model in models:
+        chunks: list[str] = []
+        usage = None
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": content},
+                ],
+                stream=True,
+                stream_options={"include_usage": True},
+                extra_body={"usage": {"include": True}},
+            )
+            async for part in response:
+                if part.usage:
+                    usage = part.usage
+                if not part.choices:
+                    continue
+                piece = part.choices[0].delta.content
+                if piece:
+                    chunks.append(piece)
+                    yield piece
+        except Exception as e:
+            last_error = str(e)
+            if chunks:
+                raise RuntimeError(f"поток оборвался: {e}") from e
+            continue
+
+        yield Reply(
+            text="".join(chunks).strip(),
+            model=model,
+            input_tokens=usage.prompt_tokens if usage else 0,
+            output_tokens=usage.completion_tokens if usage else 0,
+            usd=getattr(usage, "cost", None) if usage else None,
+        )
+        return
+
+    raise RuntimeError(last_error)
+
+
 async def chat(system: str, content, models: list[str], max_tokens: int = 2500) -> Reply:
     client = _get_client()
     last_error = "нет ответа"

@@ -1,8 +1,9 @@
 import json
+from contextlib import suppress
 
 from pydantic import ValidationError
 
-from llm import MODELS, Reply, chat
+from llm import MODELS, Reply, chat, stream
 from prompts import ANALYZE_RETRY, ANALYZE_SYSTEM, fenced
 from schema import Finding, Findings, Report
 
@@ -59,6 +60,120 @@ def _anchor(findings: list[Finding], text: str) -> tuple[list[Finding], list[Fin
             f.start, f.end = span
             found.append(f)
     return found, lost
+
+
+def findings_so_far(buffer: str, pos: int) -> tuple[list[dict], int]:
+    """Достаёт из ещё не дописанного JSON те объекты findings, которые уже закрылись.
+
+    Модель отдаёт ответ потоком, но ждать закрывающую скобку всего документа — значит
+    показать всё разом в конце, то есть тот же спиннер. Поэтому идём по буферу и, как
+    только очередной объект массива закрылся, отдаём его наверх.
+
+    Возвращает найденные объекты и позицию, с которой продолжать в следующий раз.
+    """
+    if pos == 0:
+        key = buffer.find('"findings"')
+        if key == -1:
+            return [], 0
+        bracket = buffer.find("[", key)
+        if bracket == -1:
+            return [], 0
+        pos = bracket + 1
+
+    found: list[dict] = []
+    depth = 0
+    start = None
+    in_string = False
+    escaped = False
+    i = pos
+
+    while i < len(buffer):
+        ch = buffer[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                with suppress(ValueError):
+                    found.append(json.loads(buffer[start : i + 1]))
+                start = None
+                pos = i + 1
+        elif ch == "]" and depth == 0:
+            return found, i + 1
+        i += 1
+
+    return found, pos
+
+
+async def analyze_stream(text: str):
+    """Разбор потоком: находки уезжают наверх по одной, как только модель их дописала.
+
+    Выдаёт словари-события: {"type": "finding" | "done", ...}.
+    """
+    user = f"Текст договора:\n\n{fenced(text)}"
+
+    buffer = ""
+    pos = 0
+    shown: set[str] = set()
+    found: list[Finding] = []
+    reply: Reply | None = None
+
+    async for piece in stream(ANALYZE_SYSTEM, user, MODELS, max_tokens=6000):
+        if isinstance(piece, Reply):
+            reply = piece
+            break
+
+        buffer += piece
+        ready, pos = findings_so_far(buffer, pos)
+        for raw in ready:
+            try:
+                finding = Finding.model_validate(raw)
+            except ValidationError:
+                continue
+            span = locate(text, finding.quote)
+            if span is None or finding.quote in shown:
+                continue
+            finding.start, finding.end = span
+            shown.add(finding.quote)
+            found.append(finding)
+            yield {"type": "finding", "data": finding.model_dump()}
+
+    if reply is None:
+        raise RuntimeError("модель не ответила")
+
+    try:
+        report = _parse(reply.text)
+    except (ValueError, json.JSONDecodeError, ValidationError) as e:
+        raise RuntimeError(f"модель вернула не JSON: {e}") from e
+
+    # Цитаты, не найденные дословно, отсекаются здесь же: показывать находку, которую
+    # нечем подсветить, хуже, чем не показывать её вовсе.
+    anchored, _ = _anchor(report.findings, text)
+    report.findings = sorted(
+        found + [f for f in anchored if f.quote not in shown], key=lambda f: f.start
+    )
+
+    yield {
+        "type": "done",
+        "data": {
+            "verdict": report.verdict,
+            "summary": report.summary,
+            "findings": [f.model_dump() for f in report.findings],
+            "actions": report.actions,
+            "cost_rub": round(reply.cost, 2),
+        },
+    }
 
 
 async def analyze(text: str) -> tuple[Report, list[Reply]]:
