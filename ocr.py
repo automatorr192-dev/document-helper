@@ -10,10 +10,10 @@
 """
 
 import asyncio
-import logging
 
 from extract import ScannedPdfError, page_images, tidy
 from llm import MODELS_LIGHT, Reply, chat
+from observability import log
 from prompts import OCR_SYSTEM
 
 
@@ -40,10 +40,12 @@ async def text_from_scan(path: str) -> tuple[str, list[Reply]]:
     replies = await asyncio.gather(*(_page(i, url) for i, url in enumerate(images, 1)))
 
     text = tidy("\n\n".join(r.text for r in replies if r.text))
-    logging.info(
-        "распознано страниц: %d, %.2f ₽",
-        len(images),
-        sum(r.cost for r in replies),
+    log.info(
+        "ocr.done",
+        pages=len(images),
+        model=replies[0].model if replies else None,
+        cost_rub=round(sum(r.cost for r in replies), 2),
+        chars=len(text),
     )
     if len(text) < 80:
         raise ScannedPdfError

@@ -67,8 +67,8 @@ Telegram ─→ мини-апп ─→ POST /api/extract ─→ pdfplumber ─�
 
 ## Стек
 
-Python 3.11 · aiogram · Pydantic · pdfplumber · pypdfium2 · OpenRouter (Claude Sonnet 5
-на разбор, Haiku 4.5 на распознавание сканов, с фолбэком) ·
+Python 3.11 · aiogram · Pydantic · pdfplumber · pypdfium2 · structlog · Sentry ·
+OpenRouter (Claude Sonnet 5 на разбор, Haiku 4.5 на распознавание сканов, с фолбэком) ·
 Playwright · Docker · GitHub Actions
 
 ## Запуск
@@ -122,7 +122,7 @@ python evals/run_eval.py  # эвалы на LLM-часть
 - [x] `/health`
 - [x] Мини-апп внутри бота с подсветкой пунктов
 - [x] Проверка подписи `initData` и лимит разборов на пользователя
-- [ ] Логи и ошибки: structlog + Sentry
+- [x] Логи и ошибки: structlog + Sentry
 - [x] OCR для сканов
 - [ ] Задеплоено, ссылка живая
 
@@ -136,3 +136,7 @@ python evals/run_eval.py  # эвалы на LLM-часть
 
 Текст договора попадает в мини-апп только через `textContent`: внутри PDF может лежать
 что угодно, включая разметку, и превращать её в DOM нельзя.
+
+В Sentry не уходит ни содержимое договоров, ни тексты запросов к модели — `send_default_pii`
+выключен намеренно. Трекер ошибок нужен, чтобы узнать о поломке, а не чтобы собирать копии
+чужих документов.

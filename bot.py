@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import os
 import tempfile
 from contextlib import suppress
@@ -29,12 +28,13 @@ import generator
 import ocr
 import quota
 from extract import ScannedPdfError, image_data_url, pdf_text
+from observability import log, setup
 from prompts import DISCLAIMER, DOC_TYPES
 from schema import Report
 from storage import FileStorage
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
+setup()
 
 dp = Dispatcher(storage=FileStorage())
 
@@ -188,7 +188,13 @@ async def _run_analysis(message: Message, coro):
         except RuntimeError as e:
             await message.answer(f"ИИ временно недоступен ({e}). Попробуй ещё раз.")
             return
-    logging.info("разбор: %d находок, %.2f ₽", len(report.findings), sum(r.cost for r in replies))
+    log.info(
+        "analyze.done",
+        source="chat",
+        user_id=message.chat.id,
+        findings=len(report.findings),
+        cost_rub=round(sum(r.cost for r in replies), 2),
+    )
     for part in _split(render(report)):
         await message.answer(part, parse_mode=None)
     await message.answer(DISCLAIMER, reply_markup=back_kb())
@@ -299,7 +305,7 @@ async def _download(bot: Bot, file_id: str, suffix: str) -> str:
 async def on_error(event: ErrorEvent) -> bool:
     """Ошибка в хендлере не должна ронять polling и не должна оставлять человека молча
     смотреть в экран."""
-    logging.exception("ошибка в хендлере", exc_info=event.exception)
+    log.exception("handler.failed", exc_info=event.exception)
     if isinstance(event.exception, TelegramForbiddenError):
         return True
     message = getattr(event.update, "message", None) or getattr(

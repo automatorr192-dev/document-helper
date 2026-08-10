@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import os
 import tempfile
 from contextlib import asynccontextmanager, suppress
@@ -16,8 +15,9 @@ import ocr
 import quota
 import tgauth
 from extract import ScannedPdfError, pdf_text
+from observability import log, setup
 
-logging.basicConfig(level=logging.INFO)
+setup()
 
 HERE = os.path.dirname(__file__)
 WEBAPP = os.path.join(HERE, "webapp")
@@ -50,7 +50,7 @@ async def _supervise_bot():
         except asyncio.CancelledError:
             raise
         except Exception:
-            logging.exception("бот упал, перезапуск через 5 с")
+            log.exception("bot.crashed", restart_in=5)
             await asyncio.sleep(5)
 
 
@@ -152,7 +152,14 @@ async def api_analyze(body: AnalyzeIn):
         raise HTTPException(503, f"ИИ временно недоступен ({e}). Попробуй ещё раз.") from e
 
     cost = sum(r.cost for r in replies)
-    logging.info("разбор для %s: %d находок, %.2f руб", user.get("id"), len(report.findings), cost)
+    log.info(
+        "analyze.done",
+        user_id=user.get("id"),
+        findings=len(report.findings),
+        cost_rub=round(cost, 2),
+        chars=len(text),
+        left=left,
+    )
 
     return JSONResponse(
         {
