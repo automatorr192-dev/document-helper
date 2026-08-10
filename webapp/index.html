@@ -90,6 +90,10 @@
     cursor: pointer; transition: transform .18s var(--snap), opacity .18s var(--snap);
   }
   .btn:active{ transform: scale(.97); }
+  .btn-quiet{
+    background: transparent; color: var(--link);
+    border: 1px solid color-mix(in srgb, var(--muted) 34%, transparent);
+  }
   .btn[disabled]{ opacity:.55; }
   .fineprint{
     margin-top: 16px; color: var(--muted); font-size: 12.5px; line-height:1.45; max-width: 34ch;
@@ -300,6 +304,10 @@
       <ol id="actionlist"></ol>
     </div>
     <p class="disclaimer">Это ИИ-разбор, а не юридическая консультация. Важное перед подписью сверь с юристом.</p>
+    <div class="pick-cta" style="animation:none;opacity:1">
+      <button class="btn btn-quiet" id="share" type="button" hidden>Поделиться отчётом</button>
+    </div>
+    <p class="fineprint" id="sharehint" style="animation:none;opacity:1" hidden></p>
     <div class="pick-cta browser-note" style="animation:none;opacity:1">
       <button class="btn" id="again2" type="button">Проверить другой договор</button>
     </div>
@@ -477,6 +485,7 @@
   // --- Запросы -------------------------------------------------------------
 
   const initData = (TG && TG.initData) || '';
+  let lastReport = null;
 
   // Статика может лежать отдельно от бэкенда (GitHub Pages), поэтому адрес API вынесен.
   const API = String(window.API_BASE || '').replace(/\/+$/, '');
@@ -532,6 +541,9 @@
     $('summary').textContent = 'Ищу кабальные пункты, скрытые платежи и штрафы.';
     $('pulse').className = 'pulse';
     $('actions').hidden = true;
+    $('share').hidden = true;
+    $('sharehint').hidden = true;
+    lastReport = null;
     paper.classList.add('scanning');
     show('doc');
     showBack(backToPick);
@@ -563,6 +575,10 @@
         $('actions').hidden = false;
       }
 
+      lastReport = report;
+      $('share').hidden = false;
+      $('sharehint').hidden = true;
+
       haptic('notify', findings.some((f) => f.severity === 'red') ? 'warning' : 'success');
       setMainButton('Проверить другой договор', backToPick);
     } catch (e) {
@@ -572,6 +588,40 @@
       haptic('notify', 'error');
     }
   }
+
+  // --- Поделиться ----------------------------------------------------------
+
+  $('share').addEventListener('click', async () => {
+    if (!lastReport) return;
+    const button = $('share');
+    const hint = $('sharehint');
+    button.disabled = true;
+    button.textContent = 'Сохраняю…';
+    haptic('impact', 'light');
+    try {
+      const saved = await post('/api/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ init_data: initData, report: lastReport })
+      });
+      const url = saved.url.startsWith('http') ? saved.url : API + saved.url;
+      button.hidden = true;
+      hint.hidden = false;
+      hint.textContent = 'Ссылка на отчёт: ' + url;
+      // Родной шеринг Telegram: человек выбирает чат, а не копирует адрес руками.
+      if (TG && TG.openTelegramLink) {
+        TG.openTelegramLink('https://t.me/share/url?url=' + encodeURIComponent(url));
+      }
+      haptic('notify', 'success');
+    } catch (e) {
+      hint.hidden = false;
+      hint.textContent = e.message;
+      haptic('notify', 'error');
+    } finally {
+      button.disabled = false;
+      if (!button.hidden) button.textContent = 'Поделиться отчётом';
+    }
+  });
 
   // --- Выбор файла ---------------------------------------------------------
 

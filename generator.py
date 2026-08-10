@@ -75,7 +75,10 @@ def _template() -> str:
 
 
 async def render_pdf(body_html: str, out_path: str) -> None:
-    html = _template().replace("{{BODY}}", body_html)
+    await html_to_pdf(_template().replace("{{BODY}}", body_html), out_path)
+
+
+async def html_to_pdf(html: str, out_path: str) -> None:
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         # Скрипты выключены: в документе нечему исполняться, а вырваться наружу через

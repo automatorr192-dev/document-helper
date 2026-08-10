@@ -5,14 +5,16 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import analyzer
 import bot as tg
+import generator
 import ocr
 import quota
+import share
 import tgauth
 from extract import ScannedPdfError, pdf_text
 from observability import log, setup
@@ -26,6 +28,9 @@ MAX_TEXT_CHARS = 60_000
 DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", 5))
 # Парсинг PDF не платный, но нагружает процессор — свой лимит, пошире.
 EXTRACT_LIMIT = int(os.environ.get("EXTRACT_LIMIT", 30))
+SHARE_LIMIT = int(os.environ.get("SHARE_LIMIT", 20))
+# Адрес, по которому приложение видно снаружи: из него собирается ссылка на отчёт.
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 
 
 class AnalyzeIn(BaseModel):
@@ -169,6 +174,59 @@ async def api_analyze(body: AnalyzeIn):
             "actions": report.actions,
             "left": left,
         }
+    )
+
+
+class ShareIn(BaseModel):
+    init_data: str = ""
+    report: dict = {}
+
+
+@app.post("/api/share")
+async def api_share(body: ShareIn):
+    """Сохраняет отчёт и отдаёт короткую ссылку. Сам договор не сохраняется."""
+    user = _user(body.init_data)
+    _take(user.get("id", 0), SHARE_LIMIT, "share")
+
+    if not body.report.get("findings") and not body.report.get("summary"):
+        raise HTTPException(422, "Нечего сохранять — отчёт пустой.")
+
+    token = share.save(body.report)
+    log.info("share.saved", user_id=user.get("id"), token=token)
+    return {"url": f"{PUBLIC_URL}/r/{token}" if PUBLIC_URL else f"/r/{token}", "token": token}
+
+
+@app.get("/r/{token}", response_class=HTMLResponse)
+async def shared_report(token: str):
+    report = share.load(token)
+    if report is None:
+        raise HTTPException(404, "Отчёт не найден или ссылка устарела.")
+    return HTMLResponse(share.render_html(report))
+
+
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
+@app.get("/r/{token}.pdf")
+async def shared_report_pdf(token: str):
+    report = share.load(token)
+    if report is None:
+        raise HTTPException(404, "Отчёт не найден или ссылка устарела.")
+
+    out = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    out.close()
+    try:
+        await generator.html_to_pdf(share.render_html(report), out.name)
+        pdf = await asyncio.to_thread(_read_bytes, out.name)
+    finally:
+        os.remove(out.name)
+
+    return Response(
+        pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'inline; filename="razbor.pdf"'},
     )
 
 

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<meta name="robots" content="noindex, nofollow">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{SUMMARY}}">
+<style>
+  :root{
+    --bg:#f7f7f5; --card:#fff; --ink:#1a1a19; --muted:#6b6b64; --line:#e6e6e1;
+    --red:#c2313a; --red-bg:#fbecec; --amber:#9a6512; --amber-bg:#f8f0e2;
+    --green:#2f7d43; --green-bg:#e9f4ec;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:16px/1.6 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:720px;margin:0 auto;padding:44px 20px 72px}
+  header{margin-bottom:28px}
+  .brand{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  h1{margin-top:10px;font-size:26px;line-height:1.25;letter-spacing:-.02em}
+  .summary{margin-top:12px;color:var(--muted)}
+  .item{
+    background:var(--card); border:1px solid var(--line); border-left-width:4px;
+    border-radius:12px; padding:18px 20px; margin-top:14px;
+  }
+  .item.red{border-left-color:var(--red)}
+  .item.yellow{border-left-color:var(--amber)}
+  .item.green{border-left-color:var(--green)}
+  .tag{
+    display:inline-block; font-size:12px; font-weight:700; padding:3px 9px;
+    border-radius:999px; margin-bottom:9px;
+  }
+  .red .tag{background:var(--red-bg);color:var(--red)}
+  .yellow .tag{background:var(--amber-bg);color:var(--amber)}
+  .green .tag{background:var(--green-bg);color:var(--green)}
+  .item h2{font-size:17px;line-height:1.35}
+  blockquote{
+    margin:11px 0; padding:10px 14px; background:#fafaf8; border-radius:8px;
+    font-family:Georgia,"Times New Roman",serif; color:#333; font-size:15px;
+  }
+  .plain{color:#333}
+  .article{margin-top:8px;font-size:13px;color:var(--muted)}
+  .actions{margin-top:26px;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;padding:18px 20px}
+  .actions h3{font-size:15px;margin-bottom:10px}
+  .actions li{margin:7px 0 7px 18px}
+  footer{margin-top:28px;color:var(--muted);font-size:13px;line-height:1.5}
+  @media print{
+    body{background:#fff}
+    .wrap{padding:0}
+    .item{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">Документ-хелпер</div>
+    <h1>{{VERDICT}}</h1>
+    <p class="summary">{{SUMMARY}}</p>
+  </header>
+  {{ITEMS}}
+  {{ACTIONS}}
+  <footer>{{DISCLAIMER}}</footer>
+</div>
+</body>
+</html>
