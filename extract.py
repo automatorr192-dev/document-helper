@@ -1,7 +1,16 @@
 import base64
+import io
+import os
 import re
 
 import pdfplumber
+import pypdfium2 as pdfium
+
+# Сколько страниц скана вообще смотрим. Каждая — отдельный платный запрос к модели,
+# поэтому потолок нужен: без него один PDF на сто страниц выест дневной бюджет.
+OCR_MAX_PAGES = int(os.environ.get("OCR_MAX_PAGES", 5))
+# 150 DPI — компромисс: мелкий шрифт договора ещё читается, а страница весит ~300 КБ.
+OCR_DPI = int(os.environ.get("OCR_DPI", 150))
 
 
 class ScannedPdfError(Exception):
@@ -53,6 +62,26 @@ def pdf_text(path: str) -> str:
     if len(text) < 80:
         raise ScannedPdfError
     return text
+
+
+def page_images(path: str, max_pages: int = OCR_MAX_PAGES, dpi: int = OCR_DPI) -> list[str]:
+    """Страницы PDF как data-URL картинок — вход для распознавания скана.
+
+    В скане нет ни одной буквы, внутри лежит фотография бумаги. Прочитать её может
+    только тот, кто умеет смотреть, поэтому страницы превращаем в изображения и отдаём
+    vision-модели.
+    """
+    pdf = pdfium.PdfDocument(path)
+    try:
+        urls = []
+        for i in range(min(len(pdf), max_pages)):
+            image = pdf[i].render(scale=dpi / 72).to_pil().convert("RGB")
+            buffer = io.BytesIO()
+            image.save(buffer, "JPEG", quality=70, optimize=True)
+            urls.append("data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode())
+        return urls
+    finally:
+        pdf.close()
 
 
 def image_data_url(path: str) -> str:

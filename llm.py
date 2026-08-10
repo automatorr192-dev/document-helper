@@ -37,9 +37,18 @@ class Reply:
     model: str
     input_tokens: int
     output_tokens: int
+    usd: float | None = None
 
     @property
     def cost(self) -> float:
+        """Рубли за этот запрос.
+
+        Если OpenRouter вернул фактическую списанную сумму — берём её: она уже включает
+        наценку роутера и не устаревает вместе с нашей табличкой. Не вернул — считаем по
+        PRICE_USD, но это оценка, а не факт.
+        """
+        if self.usd is not None:
+            return round(self.usd * RUB_PER_USD, 2)
         return cost_rub(self.model, self.input_tokens, self.output_tokens)
 
 
@@ -69,6 +78,10 @@ async def chat(system: str, content, models: list[str], max_tokens: int = 2500) 
                     {"role": "system", "content": system},
                     {"role": "user", "content": content},
                 ],
+                # Просим OpenRouter вернуть, сколько он реально списал за этот запрос.
+                # Поле нестандартное, поэтому читаем его через getattr: если роутер его
+                # не пришлёт, останется наша оценка по табличке.
+                extra_body={"usage": {"include": True}},
             )
             text = resp.choices[0].message.content
             if text:
@@ -78,6 +91,7 @@ async def chat(system: str, content, models: list[str], max_tokens: int = 2500) 
                     model=model,
                     input_tokens=usage.prompt_tokens if usage else 0,
                     output_tokens=usage.completion_tokens if usage else 0,
+                    usd=getattr(usage, "cost", None) if usage else None,
                 )
         except Exception as e:
             last_error = str(e)

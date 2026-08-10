@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import analyzer
 import bot as tg
+import ocr
 import quota
 import tgauth
 from extract import ScannedPdfError, pdf_text
@@ -112,18 +113,28 @@ async def api_extract(file: UploadFile = File(...), init_data: str = Form("")):
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     tmp.write(raw)
     tmp.close()
+    scanned = False
     try:
-        # pdfplumber синхронный и тяжёлый: в event loop он вешает и API, и бота в этом же
-        # процессе. Считаем в отдельном потоке.
-        text = await asyncio.to_thread(pdf_text, tmp.name)
+        try:
+            # pdfplumber синхронный и тяжёлый: в event loop он вешает и API, и бота в этом
+            # же процессе. Считаем в отдельном потоке.
+            text = await asyncio.to_thread(pdf_text, tmp.name)
+        except ScannedPdfError:
+            # Текста внутри нет — это скан. Распознавание платное, поэтому списывается из
+            # той же корзины, что и разбор: у скана два платных шага вместо одного.
+            _take(user.get("id", 0), DAILY_LIMIT, "analyze")
+            text, _ = await ocr.text_from_scan(tmp.name)
+            scanned = True
     except ScannedPdfError as e:
-        raise HTTPException(422, "Похоже на скан — текста внутри нет. OCR пока не умею.") from e
+        raise HTTPException(422, "На страницах не нашлось текста — нечего разбирать.") from e
+    except RuntimeError as e:
+        raise HTTPException(503, f"Не смог распознать скан ({e}). Попробуй ещё раз.") from e
     except Exception as e:
         raise HTTPException(422, "Не смог прочитать этот PDF.") from e
     finally:
         os.remove(tmp.name)
 
-    return {"text": text[:MAX_TEXT_CHARS]}
+    return {"text": text[:MAX_TEXT_CHARS], "scanned": scanned}
 
 
 @app.post("/api/analyze")

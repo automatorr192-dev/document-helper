@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 
 import analyzer
 import generator
+import ocr
 import quota
 from extract import ScannedPdfError, image_data_url, pdf_text
 from prompts import DISCLAIMER, DOC_TYPES
@@ -202,10 +203,17 @@ async def analyze_document(message: Message):
         return
     path = await _download(message.bot, message.document.file_id, ".pdf")
     try:
-        # pdfplumber синхронный: в event loop он вешает и бота, и веб-часть того же процесса.
-        text = await asyncio.to_thread(pdf_text, path)
+        try:
+            # pdfplumber синхронный: в event loop он вешает и бота, и веб-часть процесса.
+            text = await asyncio.to_thread(pdf_text, path)
+        except ScannedPdfError:
+            await message.answer("Внутри скан, текста нет — распознаю страницы, это дольше…")
+            text, _ = await ocr.text_from_scan(path)
     except ScannedPdfError:
-        await message.answer("Не смог вытащить текст (похоже на скан). Пришли фото страниц.")
+        await message.answer("На страницах не нашлось текста — разбирать нечего.")
+        return
+    except RuntimeError as e:
+        await message.answer(f"Не смог распознать скан ({e}). Попробуй ещё раз.")
         return
     except Exception:
         await message.answer("Не смог прочитать файл. Пришли текстом или фото.")

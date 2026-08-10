@@ -276,7 +276,7 @@
     <button class="btn" id="choose" type="button">Выбрать договор</button>
   </div>
 
-  <p class="fineprint">PDF с текстом, до 10 МБ. Скан-картинку пока не читаю.</p>
+  <p class="fineprint">PDF до 10 МБ. Скан тоже читаю — распознаю страницы, это дольше.</p>
   <p class="fineprint browser-note">Это страница мини-аппа. Чтобы разобрать договор, открой хелпер через бота в Telegram.</p>
 
   <div class="notice" id="notice" role="alert"></div>
@@ -506,6 +506,13 @@
     form.append('file', chosen);
     form.append('init_data', initData);
 
+    // Обычный PDF отдаёт текст за доли секунды, а скан уходит на распознавание и молчит
+    // секунд десять. Без этой подсказки человек смотрит в пустой экран и жмёт ещё раз.
+    notice.textContent = 'Открываю файл…';
+    const slow = setTimeout(() => {
+      notice.textContent = 'Похоже на скан — распознаю страницы. Это дольше обычного.';
+    }, 2500);
+
     let text;
     try {
       const extracted = await post('/api/extract', { method: 'POST', body: form });
@@ -514,7 +521,10 @@
       notice.textContent = e.message;
       haptic('notify', 'error');
       return;
+    } finally {
+      clearTimeout(slow);
     }
+    notice.textContent = '';
 
     // Документ на экране сразу — луч идёт по нему, пока думает модель.
     renderDocument(text, []);
