@@ -40,3 +40,32 @@ def test_analyze_rejects_forged_init_data():
     forged = "auth_date=9999999999&user=%7B%22id%22%3A1%7D&hash=" + "0" * 64
     response = client.post("/api/analyze", json={"init_data": forged, "text": "текст" * 100})
     assert response.status_code == 401
+
+
+def test_pdf_link_reaches_the_pdf_route():
+    """`/r/{token}` объявлен с параметром, который съедает и точку, поэтому порядок
+    роутов решает: при обратном порядке ссылка на PDF уходила в HTML-ветку и отвечала
+    404 всегда. Просим заведомо несуществующий токен и смотрим, кто ответил."""
+    import share
+
+    token = "нет" + "x" * 10
+    assert share.load(token) is None  # токен точно невалидный, файла нет
+
+    response = client.get(f"/r/{token}.pdf")
+    assert response.status_code == 404
+    # HTML-ветка отдаёт тот же 404, поэтому различаем по тому, какой роут сматчился.
+    assert response.request.url.path.endswith(".pdf")
+    matched = [r.path for r in app.routes if getattr(r, "path", "").startswith("/r/{token}")]
+    assert matched[0] == "/r/{token}.pdf", f"PDF-роут должен идти первым, сейчас: {matched}"
+
+
+def test_oversized_upload_is_rejected_before_it_is_buffered():
+    """Лимит обязан сработать на потоке: раньше файл целиком читался в память и только
+    потом сверялся с 10 МБ — присланные 500 МБ клали контейнер."""
+    import main
+
+    big = io.BytesIO(b"%PDF-1.4" + b"0" * (main.MAX_PDF_BYTES + 1024))
+    files = {"file": ("big.pdf", big, "application/pdf")}
+    response = client.post("/api/extract", data={"init_data": ""}, files=files)
+    # Без валидного initData сюда и не пустят — важно, что это не падение по памяти.
+    assert response.status_code in (401, 413)

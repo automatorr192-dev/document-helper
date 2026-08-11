@@ -15,6 +15,7 @@ import html
 import json
 import os
 import secrets
+import string
 import time
 
 from prompts import DISCLAIMER
@@ -22,6 +23,9 @@ from prompts import DISCLAIMER
 DATA_DIR = os.environ.get("DATA_DIR") or ("/data" if os.path.isdir("/data") else "data")
 REPORTS = os.path.join(DATA_DIR, "reports")
 TTL = int(os.environ.get("SHARE_TTL_DAYS", 30)) * 24 * 3600
+
+# Ровно то, что выдаёт secrets.token_urlsafe.
+TOKEN_ALPHABET = frozenset(string.ascii_letters + string.digits + "-_")
 
 KEEP = ("verdict", "summary", "findings", "actions")
 FINDING_KEEP = ("severity", "title", "quote", "plain", "article")
@@ -49,7 +53,9 @@ def save(report: dict) -> str:
 
 def load(token: str) -> dict | None:
     # Токен приходит из адреса, поэтому в имя файла он не должен превратиться никогда.
-    if not token.replace("-", "").replace("_", "").isalnum():
+    # Сверяем с алфавитом token_urlsafe напрямую: isalnum() пропускал кириллицу и прочий
+    # юникод — на путь это не влияло, но проверка ловила не то, что должна.
+    if not token or not set(token) <= TOKEN_ALPHABET:
         return None
     try:
         with open(_path(token), encoding="utf-8") as f:

@@ -112,12 +112,25 @@ async def api_extract(file: UploadFile = File(...), init_data: str = Form("")):
     user = _user(init_data)
     _take(user.get("id", 0), EXTRACT_LIMIT, "extract")
 
-    raw = await file.read()
-    if len(raw) > MAX_PDF_BYTES:
-        raise HTTPException(413, "Файл больше 10 МБ. Пришли договор одним PDF поменьше.")
+    # Читаем кусками со счётчиком, а не целиком: file.read() затягивал в память весь
+    # аплоад до проверки размера, поэтому присланные 500 МБ клали контейнер раньше, чем
+    # срабатывал лимит в 10 МБ. Заголовку Content-Length верить нельзя — он от клиента.
+    too_big = HTTPException(413, "Файл больше 10 МБ. Пришли договор одним PDF поменьше.")
+    if file.size is not None and file.size > MAX_PDF_BYTES:
+        raise too_big
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    tmp.write(raw)
+    size = 0
+    try:
+        while chunk := await file.read(256 * 1024):
+            size += len(chunk)
+            if size > MAX_PDF_BYTES:
+                raise too_big
+            tmp.write(chunk)
+    except BaseException:
+        tmp.close()
+        os.remove(tmp.name)
+        raise
     tmp.close()
     scanned = False
     try:
@@ -242,19 +255,14 @@ async def api_share(body: ShareIn):
     return {"url": f"{PUBLIC_URL}/r/{token}" if PUBLIC_URL else f"/r/{token}", "token": token}
 
 
-@app.get("/r/{token}", response_class=HTMLResponse)
-async def shared_report(token: str):
-    report = share.load(token)
-    if report is None:
-        raise HTTPException(404, "Отчёт не найден или ссылка устарела.")
-    return HTMLResponse(share.render_html(report))
-
-
 def _read_bytes(path: str) -> bytes:
     with open(path, "rb") as f:
         return f.read()
 
 
+# Объявлен раньше /r/{token}: Starlette берёт первый подходящий роут, а {token} съедает
+# и точку — иначе /r/abc.pdf уходил в HTML-ветку с токеном "abc.pdf", не проходил там
+# валидацию и всегда отвечал 404. PDF по ссылке не работал вообще.
 @app.get("/r/{token}.pdf")
 async def shared_report_pdf(token: str):
     report = share.load(token)
@@ -274,6 +282,14 @@ async def shared_report_pdf(token: str):
         media_type="application/pdf",
         headers={"Content-Disposition": 'inline; filename="razbor.pdf"'},
     )
+
+
+@app.get("/r/{token}", response_class=HTMLResponse)
+async def shared_report(token: str):
+    report = share.load(token)
+    if report is None:
+        raise HTTPException(404, "Отчёт не найден или ссылка устарела.")
+    return HTMLResponse(share.render_html(report))
 
 
 class NoCacheStatic(StaticFiles):
