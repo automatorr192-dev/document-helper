@@ -25,6 +25,7 @@ from aiogram.utils.chat_action import ChatActionSender
 from dotenv import load_dotenv
 
 import analyzer
+import fields
 import generator
 import ocr
 import protocol
@@ -66,7 +67,8 @@ DESCRIPTION = (
     "Бросаешь PDF или Word — за минуту получаешь разбор: что опасно, что спорно, что "
     "нормально. Каждый пункт цитирую дословно, перевожу на человеческий и предлагаю "
     "безопасную редакцию, а спорные собираю в протокол разногласий для второй стороны. "
-    "Ещё умею собирать договор или КП с нуля.\n\n"
+    "Ещё достаю из документа стороны, ИНН, суммы и сроки в Excel и собираю договор "
+    "или КП с нуля.\n\n"
     "Нажми «Начать»."
 )
 SHORT_DESCRIPTION = (
@@ -93,6 +95,7 @@ def menu_kb() -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="💬 Разобрать в чате", callback_data="check")])
     else:
         rows.append([InlineKeyboardButton(text="🔍 Проверить договор", callback_data="check")])
+    rows.append([InlineKeyboardButton(text="📋 Вытащить данные в Excel", callback_data="fields")])
     rows.append([InlineKeyboardButton(text="📝 Создать документ", callback_data="create")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -128,9 +131,22 @@ async def to_menu(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "check")
 async def check(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Flow.awaiting_doc)
+    await state.update_data(mode="check")
     await cb.message.answer(
         "Пришли договор — <b>текстом</b>, <b>PDF</b>, <b>Word (.docx)</b> или <b>фото страниц</b>. "
         "Разберу по косточкам."
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "fields")
+async def ask_fields(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Flow.awaiting_doc)
+    await state.update_data(mode="fields")
+    await cb.message.answer(
+        "Пришли договор, счёт или акт — <b>PDF</b>, <b>Word</b>, <b>фото</b> или текстом. "
+        "Вытащу стороны, ИНН, суммы, сроки и неустойки в таблицу, у каждого значения — "
+        "цитата, откуда оно взято."
     )
     await cb.answer()
 
@@ -249,7 +265,7 @@ async def send_protocol(cb: CallbackQuery):
 
 
 @dp.message(Flow.awaiting_doc, F.document)
-async def analyze_document(message: Message):
+async def analyze_document(message: Message, state: FSMContext):
     if (message.document.file_size or 0) > MAX_DOC_BYTES:
         await message.answer("Файл больше 10 МБ. Пришли договор одним PDF поменьше.")
         return
@@ -287,11 +303,11 @@ async def analyze_document(message: Message):
         return
     finally:
         os.remove(path)
-    await _run_analysis(message, analyzer.analyze(text))
+    await _dispatch(message, state, text)
 
 
 @dp.message(Flow.awaiting_doc, F.photo)
-async def analyze_photo(message: Message):
+async def analyze_photo(message: Message, state: FSMContext):
     if not await _quota(message, "analyze"):
         return
     path = await _download(message.bot, message.photo[-1].file_id, ".jpg")
@@ -299,17 +315,57 @@ async def analyze_photo(message: Message):
         data_url = image_data_url(path)
     finally:
         os.remove(path)
+    if (await state.get_data()).get("mode") == "fields":
+        try:
+            text, _ = await ocr.text_from_image(data_url)
+        except ScannedPdfError:
+            await message.answer("На фото не нашлось текста. Сними страницу ближе и ровнее.")
+            return
+        except RuntimeError as e:
+            await message.answer(f"Не смог распознать фото ({e}). Попробуй ещё раз.")
+            return
+        await _run_fields(message, analyzer.extract(text))
+        return
     await _run_analysis(message, analyzer.analyze_image(data_url))
 
 
 @dp.message(Flow.awaiting_doc, F.text)
-async def analyze_pasted(message: Message):
+async def analyze_pasted(message: Message, state: FSMContext):
     if len(message.text) < 40:
         await message.answer("Маловато текста для разбора. Пришли договор целиком.")
         return
     if not await _quota(message, "analyze"):
         return
-    await _run_analysis(message, analyzer.analyze(message.text))
+    await _dispatch(message, state, message.text)
+
+
+async def _dispatch(message: Message, state: FSMContext, text: str) -> None:
+    if (await state.get_data()).get("mode") == "fields":
+        await _run_fields(message, analyzer.extract(text))
+    else:
+        await _run_analysis(message, analyzer.analyze(text))
+
+
+async def _run_fields(message: Message, coro) -> None:
+    async with ChatActionSender.upload_document(bot=message.bot, chat_id=message.chat.id):
+        try:
+            card, replies = await coro
+        except RuntimeError as e:
+            await message.answer(f"ИИ временно недоступен ({e}). Попробуй ещё раз.")
+            return
+    log.info(
+        "fields.done",
+        user_id=message.chat.id,
+        filled=len(card.filled),
+        confirmed=card.confirmed,
+        cost_rub=round(sum(r.cost for r in replies), 2),
+    )
+    await message.answer(fields.chat_text(card))
+    await message.answer_document(
+        BufferedInputFile(fields.xlsx(card), filename="Данные документа.xlsx"),
+        caption="Таблица для учёта: значение, цитата-источник и колонка «Проверил».",
+        reply_markup=back_kb(),
+    )
 
 
 # --- Генерация ---

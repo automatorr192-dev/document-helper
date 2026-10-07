@@ -29,6 +29,14 @@ async def _page(index: int, data_url: str) -> Reply:
     )
 
 
+async def text_from_image(data_url: str) -> tuple[str, list[Reply]]:
+    reply = await _page(1, data_url)
+    text = tidy(reply.text or "")
+    if len(text) < 80:
+        raise ScannedPdfError
+    return text, [reply]
+
+
 async def text_from_scan(path: str) -> tuple[str, list[Reply]]:
     """Текст скана и все ответы модели. Кидает ScannedPdfError, если читать нечего."""
     images = await asyncio.to_thread(page_images, path)

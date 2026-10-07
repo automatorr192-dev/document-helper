@@ -51,3 +51,23 @@ class Report(BaseModel):
             return head
         word = plural(self.critical, "критичная", "критичные", "критичных")
         return f"{head}, {self.critical} {word}"
+
+
+class DocField(BaseModel):
+    key: str
+    value: str | None = None
+    quote: str | None = None
+    start: int = -1
+    end: int = -1
+
+
+class Card(BaseModel):
+    fields: list[DocField] = Field(default_factory=list)
+
+    @property
+    def filled(self) -> list[DocField]:
+        return [f for f in self.fields if f.value]
+
+    @property
+    def confirmed(self) -> int:
+        return sum(1 for f in self.filled if f.start >= 0)

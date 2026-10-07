@@ -4,8 +4,8 @@ from contextlib import suppress
 from pydantic import ValidationError
 
 from llm import MODELS, Reply, chat, stream
-from prompts import ANALYZE_RETRY, ANALYZE_SYSTEM, fenced
-from schema import Finding, Findings, Report
+from prompts import ANALYZE_RETRY, ANALYZE_SYSTEM, EXTRACT_SYSTEM, FIELDS, fenced
+from schema import Card, DocField, Finding, Findings, Report
 
 
 def _normalize(s: str) -> tuple[str, list[int]]:
@@ -227,3 +227,24 @@ async def analyze_image(data_url: str) -> tuple[Report, list[Reply]]:
         return _parse(reply.text), [reply]
     except (ValueError, json.JSONDecodeError, ValidationError) as e:
         raise RuntimeError(f"модель вернула не JSON: {e}") from e
+
+
+async def extract(text: str) -> tuple[Card, list[Reply]]:
+    """Данные документа для таблицы. Каждое значение привязано к цитате, чтобы человек
+    сверил его с текстом; без привязки оно помечается как непроверенное."""
+    reply = await chat(EXTRACT_SYSTEM, f"Текст документа:\n\n{fenced(text)}", MODELS, 3000)
+    try:
+        card = Card.model_validate(_json(reply.text))
+    except (ValueError, json.JSONDecodeError, ValidationError) as e:
+        raise RuntimeError(f"модель вернула не JSON: {e}") from e
+    by_key = {f.key: f for f in card.fields if f.key in FIELDS}
+    ordered = []
+    for key in FIELDS:
+        field = by_key.get(key) or DocField(key=key)
+        if field.value and field.quote:
+            span = locate(text, field.quote)
+            if span:
+                field.start, field.end = span
+        ordered.append(field)
+    card.fields = ordered
+    return card, [reply]

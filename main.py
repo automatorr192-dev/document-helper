@@ -14,6 +14,7 @@ import analyzer
 import bot as tg
 import generator
 import ocr
+import prompts
 import protocol
 import quota
 import share
@@ -245,6 +246,30 @@ async def api_analyze_stream(body: AnalyzeIn):
         # Без этого прокси буферизует ответ и складывает поток обратно в один кусок.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/fields")
+async def api_fields(body: AnalyzeIn):
+    """Данные документа в JSON: для таблицы, CRM или 1С. Каждое значение с цитатой."""
+    user = _user(body.init_data)
+    if len(body.text.strip()) < 80:
+        raise HTTPException(422, "Маловато текста — пришли документ целиком.")
+    _take(user.get("id", 0), DAILY_LIMIT, "analyze")
+    try:
+        card, replies = await analyzer.extract(body.text[:MAX_TEXT_CHARS])
+    except RuntimeError as e:
+        raise HTTPException(503, f"ИИ временно недоступен ({e}).") from e
+    log.info(
+        "fields.done",
+        user_id=user.get("id"),
+        filled=len(card.filled),
+        confirmed=card.confirmed,
+        cost_rub=round(sum(r.cost for r in replies), 2),
+    )
+    return {
+        "fields": [{"label": prompts.FIELDS[f.key], **f.model_dump()} for f in card.fields],
+        "confirmed": card.confirmed,
+    }
 
 
 class ShareIn(BaseModel):

@@ -21,6 +21,9 @@ PRICE_USD = {
     "anthropic/claude-haiku": (1.0, 5.0),
 }
 RUB_PER_USD = float(os.environ.get("RUB_PER_USD", 80))
+BASE_URL = os.environ.get("LLM_BASE_URL") or "https://openrouter.ai/api/v1"
+ROUTER = "openrouter.ai" in BASE_URL
+EXTRA = {"usage": {"include": True}} if ROUTER else None
 
 
 def cost_rub(model: str, input_tokens: int, output_tokens: int) -> float:
@@ -59,8 +62,8 @@ def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
         _client = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ["OPENROUTER_API_KEY"],
+            base_url=BASE_URL,
+            api_key=os.environ.get("LLM_API_KEY") or os.environ["OPENROUTER_API_KEY"],
             timeout=120,
         )
     return _client
@@ -88,7 +91,7 @@ async def stream(system: str, content, models: list[str], max_tokens: int = 2500
                 ],
                 stream=True,
                 stream_options={"include_usage": True},
-                extra_body={"usage": {"include": True}},
+                extra_body=EXTRA,
             )
             async for part in response:
                 if part.usage:
@@ -132,7 +135,7 @@ async def chat(system: str, content, models: list[str], max_tokens: int = 2500) 
                 # Просим OpenRouter вернуть, сколько он реально списал за этот запрос.
                 # Поле нестандартное, поэтому читаем его через getattr: если роутер его
                 # не пришлёт, останется наша оценка по табличке.
-                extra_body={"usage": {"include": True}},
+                extra_body=EXTRA,
             )
             text = resp.choices[0].message.content
             if text:
