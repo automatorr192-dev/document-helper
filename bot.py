@@ -12,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BotCommand,
+    BufferedInputFile,
     CallbackQuery,
     ErrorEvent,
     FSInputFile,
@@ -26,7 +27,9 @@ from dotenv import load_dotenv
 import analyzer
 import generator
 import ocr
+import protocol
 import quota
+import share
 from extract import (
     ScannedPdfError,
     UnsupportedFormat,
@@ -174,6 +177,8 @@ def render(report: Report) -> str:
     for f in report.findings:
         article = f" ({f.article})" if f.article else ""
         lines += ["", f"{MARKS[f.severity]} {f.title}{article}", f"«{f.quote}»", f.plain]
+        if f.fix:
+            lines.append(f"✏️ Предложить вместо: {f.fix}")
     if report.actions:
         lines += ["", "📌 Перед подписанием:"] + [f"— {a}" for a in report.actions]
     return "\n".join(lines)
@@ -205,7 +210,41 @@ async def _run_analysis(message: Message, coro):
     )
     for part in _split(render(report)):
         await message.answer(part, parse_mode=None)
-    await message.answer(DISCLAIMER, reply_markup=back_kb())
+    data = report.model_dump() | {"verdict": report.verdict}
+    if protocol.disputed(data):
+        token = await asyncio.to_thread(share.save, data)
+        await message.answer(DISCLAIMER, reply_markup=protocol_kb(token))
+    else:
+        await message.answer(DISCLAIMER, reply_markup=back_kb())
+
+
+def protocol_kb(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📄 Протокол разногласий (Word)", callback_data=f"proto:{token}"
+                )
+            ],
+            [InlineKeyboardButton(text="⬅ В меню", callback_data="menu")],
+        ]
+    )
+
+
+@dp.callback_query(F.data.startswith("proto:"))
+async def send_protocol(cb: CallbackQuery):
+    report = share.load(cb.data.split(":", 1)[1])
+    if report is None or not isinstance(cb.message, Message):
+        await cb.answer("Разбор устарел — пришли договор ещё раз.", show_alert=True)
+        return
+    await cb.answer()
+    await cb.message.answer_document(
+        BufferedInputFile(protocol.docx(report), filename="Протокол разногласий.docx"),
+        caption=(
+            "Протокол разногласий: спорные пункты, наша редакция и обоснование. "
+            "Впиши номер договора и реквизиты, сверь с юристом и отправляй контрагенту."
+        ),
+    )
 
 
 @dp.message(Flow.awaiting_doc, F.document)

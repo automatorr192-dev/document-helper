@@ -230,6 +230,8 @@
   }
   .plain{ margin: 15px 0 0; font-size: 15px; line-height:1.6; }
   .article{ margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+  .fix{ margin: 16px 0 0; padding: 12px 14px; border-radius: 12px; border: 1px dashed color-mix(in srgb, var(--muted) 45%, transparent); font-size: 14.5px; line-height: 1.55; }
+  .fix b{ display:block; font-size: 12px; letter-spacing:.04em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
 
   /* ---------- Браузерный фолбэк ---------- */
 
@@ -306,6 +308,7 @@
     <p class="disclaimer">Это ИИ-разбор, а не юридическая консультация. Важное перед подписью сверь с юристом.</p>
     <div class="pick-cta" style="animation:none;opacity:1">
       <button class="btn btn-quiet" id="share" type="button" hidden>Поделиться отчётом</button>
+      <button class="btn btn-quiet" id="proto" type="button" hidden>Протокол разногласий .docx</button>
     </div>
     <p class="fineprint" id="sharehint" style="animation:none;opacity:1" hidden></p>
     <div class="pick-cta browser-note" style="animation:none;opacity:1">
@@ -322,6 +325,7 @@
   <blockquote class="quote" id="sheet-quote"></blockquote>
   <p class="plain" id="sheet-plain"></p>
   <p class="article" id="sheet-article"></p>
+  <p class="fix" id="sheet-fix" hidden><b>Предложить вместо</b><span id="sheet-fix-text"></span></p>
 </aside>
 
 <script>
@@ -417,6 +421,8 @@
     $('sheet-plain').textContent = f.plain;
     $('sheet-article').textContent = f.article || '';
     $('sheet-article').hidden = !f.article;
+    $('sheet-fix-text').textContent = f.fix || '';
+    $('sheet-fix').hidden = !f.fix;
 
     scrim.classList.add('on');
     sheet.classList.add('on');
@@ -592,6 +598,7 @@
     $('pulse').className = 'pulse';
     $('actions').hidden = true;
     $('share').hidden = true;
+    $('proto').hidden = true;
     $('sharehint').hidden = true;
     lastReport = null;
     paper.classList.add('scanning');
@@ -630,6 +637,7 @@
 
       lastReport = report;
       $('share').hidden = false;
+      $('proto').hidden = !findings.some((f) => f.severity === 'red' || f.severity === 'yellow');
       $('sharehint').hidden = true;
 
       haptic('notify', findings.some((f) => f.severity === 'red') ? 'warning' : 'success');
@@ -673,6 +681,37 @@
     } finally {
       button.disabled = false;
       if (!button.hidden) button.textContent = 'Поделиться отчётом';
+    }
+  });
+
+  $('proto').addEventListener('click', async () => {
+    if (!lastReport) return;
+    const button = $('proto');
+    const hint = $('sharehint');
+    button.disabled = true;
+    haptic('impact', 'light');
+    try {
+      const saved = await post('/api/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ init_data: initData, report: lastReport })
+      });
+      const page = saved.url.startsWith('http') ? saved.url : API + saved.url;
+      const url = page + '.docx';
+      if (TG && TG.downloadFile) {
+        TG.downloadFile({ url, file_name: 'protokol-raznoglasiy.docx' });
+      } else if (TG && TG.openLink) {
+        TG.openLink(url);
+      } else {
+        location.href = url;
+      }
+      haptic('notify', 'success');
+    } catch (e) {
+      hint.hidden = false;
+      hint.textContent = e.message;
+      haptic('notify', 'error');
+    } finally {
+      button.disabled = false;
     }
   });
 

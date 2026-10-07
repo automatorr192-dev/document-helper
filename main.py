@@ -14,6 +14,7 @@ import analyzer
 import bot as tg
 import generator
 import ocr
+import protocol
 import quota
 import share
 import tgauth
@@ -273,6 +274,20 @@ def _read_bytes(path: str) -> bytes:
 # Объявлен раньше /r/{token}: Starlette берёт первый подходящий роут, а {token} съедает
 # и точку — иначе /r/abc.pdf уходил в HTML-ветку с токеном "abc.pdf", не проходил там
 # валидацию и всегда отвечал 404. PDF по ссылке не работал вообще.
+@app.get("/r/{token}.docx")
+async def shared_protocol(token: str):
+    report = share.load(token)
+    if report is None:
+        raise HTTPException(404, "Отчёт не найден или ссылка устарела.")
+    if not protocol.disputed(report):
+        raise HTTPException(404, "В разборе нет спорных пунктов — протокол не нужен.")
+    return Response(
+        protocol.docx(report),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="protokol-raznoglasiy.docx"'},
+    )
+
+
 @app.get("/r/{token}.pdf")
 async def shared_report_pdf(token: str):
     report = share.load(token)

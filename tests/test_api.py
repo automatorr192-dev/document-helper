@@ -56,7 +56,8 @@ def test_pdf_link_reaches_the_pdf_route():
     # HTML-ветка отдаёт тот же 404, поэтому различаем по тому, какой роут сматчился.
     assert response.request.url.path.endswith(".pdf")
     matched = [r.path for r in app.routes if getattr(r, "path", "").startswith("/r/{token}")]
-    assert matched[0] == "/r/{token}.pdf", f"PDF-роут должен идти первым, сейчас: {matched}"
+    assert matched[-1] == "/r/{token}", f"HTML-роут должен идти последним, сейчас: {matched}"
+    assert "/r/{token}.pdf" in matched
 
 
 def test_oversized_upload_is_rejected_before_it_is_buffered():

@@ -28,7 +28,7 @@ TTL = int(os.environ.get("SHARE_TTL_DAYS", 30)) * 24 * 3600
 TOKEN_ALPHABET = frozenset(string.ascii_letters + string.digits + "-_")
 
 KEEP = ("verdict", "summary", "findings", "actions")
-FINDING_KEEP = ("severity", "title", "quote", "plain", "article")
+FINDING_KEEP = ("severity", "title", "quote", "plain", "article", "fix", "basis")
 
 
 def _path(token: str) -> str:
@@ -83,6 +83,7 @@ def render_html(report: dict) -> str:
     for f in report.get("findings") or []:
         severity = f.get("severity") if f.get("severity") in LEVELS else "yellow"
         article = f.get("article")
+        fix = f.get("fix")
         items.append(
             f'<article class="item {severity}">'
             f'<span class="tag">{LEVELS[severity]}</span>'
@@ -90,6 +91,7 @@ def render_html(report: dict) -> str:
             f"<blockquote>{esc(f.get('quote') or '')}</blockquote>"
             f'<p class="plain">{esc(f.get("plain") or "")}</p>'
             + (f'<p class="article">{esc(article)}</p>' if article else "")
+            + (f'<p class="plain"><b>Предложить вместо:</b> {esc(fix)}</p>' if fix else "")
             + "</article>"
         )
 

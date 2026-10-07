@@ -19,6 +19,8 @@ class Finding(BaseModel):
     title: str
     plain: str
     article: str | None = None
+    fix: str | None = None
+    basis: str | None = None
     start: int = -1
     end: int = -1
 
