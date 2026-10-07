@@ -17,7 +17,7 @@ import ocr
 import quota
 import share
 import tgauth
-from extract import ScannedPdfError, pdf_text
+from extract import ScannedPdfError, UnsupportedFormat, docx_text, kind, pdf_text, plain_text
 from observability import log, setup
 
 setup()
@@ -119,7 +119,10 @@ async def api_extract(file: UploadFile = File(...), init_data: str = Form("")):
     if file.size is not None and file.size > MAX_PDF_BYTES:
         raise too_big
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    fmt = kind(file.filename)
+    if fmt == "doc":
+        raise HTTPException(422, "Старый формат .doc: сохрани как .docx или PDF.")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{fmt}")
     size = 0
     try:
         while chunk := await file.read(256 * 1024):
@@ -137,7 +140,12 @@ async def api_extract(file: UploadFile = File(...), init_data: str = Form("")):
         try:
             # pdfplumber синхронный и тяжёлый: в event loop он вешает и API, и бота в этом
             # же процессе. Считаем в отдельном потоке.
-            text = await asyncio.to_thread(pdf_text, tmp.name)
+            if fmt == "docx":
+                text = await asyncio.to_thread(docx_text, tmp.name)
+            elif fmt == "txt":
+                text = await asyncio.to_thread(plain_text, tmp.name)
+            else:
+                text = await asyncio.to_thread(pdf_text, tmp.name)
         except ScannedPdfError:
             # Текста внутри нет — это скан. Распознавание платное, поэтому списывается из
             # той же корзины, что и разбор: у скана два платных шага вместо одного.
@@ -146,6 +154,8 @@ async def api_extract(file: UploadFile = File(...), init_data: str = Form("")):
             scanned = True
     except ScannedPdfError as e:
         raise HTTPException(422, "На страницах не нашлось текста — нечего разбирать.") from e
+    except UnsupportedFormat as e:
+        raise HTTPException(422, f"Не смог прочитать файл: {e}.") from e
     except RuntimeError as e:
         raise HTTPException(503, f"Не смог распознать скан ({e}). Попробуй ещё раз.") from e
     except Exception as e:

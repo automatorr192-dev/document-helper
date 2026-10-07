@@ -2,6 +2,8 @@ import base64
 import io
 import os
 import re
+import zipfile
+from xml.etree import ElementTree
 
 import pdfplumber
 import pypdfium2 as pdfium
@@ -61,6 +63,80 @@ def pdf_text(path: str) -> str:
     text = tidy("\n".join(parts))
     if len(text) < 80:
         raise ScannedPdfError
+    return text
+
+
+W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+MAX_DOCX_XML = 20 * 1024 * 1024
+
+
+class UnsupportedFormat(Exception):
+    pass
+
+
+def _paragraph(node) -> str:
+    parts = []
+    for item in node.iter():
+        if item.tag == f"{W}t" and item.text:
+            parts.append(item.text)
+        elif item.tag == f"{W}tab":
+            parts.append(" ")
+        elif item.tag in (f"{W}br", f"{W}cr"):
+            parts.append("\n")
+    return "".join(parts).strip()
+
+
+def _walk(container, blocks: list[str]) -> None:
+    for node in container:
+        if node.tag == f"{W}p":
+            blocks.append(_paragraph(node))
+        elif node.tag == f"{W}tbl":
+            for row in node.iter(f"{W}tr"):
+                cells = [
+                    " ".join(filter(None, (_paragraph(p) for p in cell.iter(f"{W}p"))))
+                    for cell in row.iter(f"{W}tc")
+                ]
+                blocks.append(" | ".join(filter(None, cells)))
+        else:
+            _walk(node, blocks)
+
+
+def docx_text(path: str) -> str:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            info = archive.getinfo("word/document.xml")
+            if info.file_size > MAX_DOCX_XML:
+                raise UnsupportedFormat("документ слишком большой")
+            root = ElementTree.fromstring(archive.read(info))
+    except (zipfile.BadZipFile, KeyError, ElementTree.ParseError) as e:
+        raise UnsupportedFormat("это не документ Word") from e
+    body = root.find(f"{W}body")
+    if body is None:
+        raise UnsupportedFormat("это не документ Word")
+    blocks: list[str] = []
+    _walk(body, blocks)
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(blocks)).strip()
+    if len(text) < 80:
+        raise UnsupportedFormat("в документе почти нет текста")
+    return text
+
+
+def kind(filename: str | None) -> str:
+    name = (filename or "").lower()
+    if name.endswith(".docx"):
+        return "docx"
+    if name.endswith(".doc"):
+        return "doc"
+    if name.endswith((".txt", ".md")):
+        return "txt"
+    return "pdf"
+
+
+def plain_text(path: str) -> str:
+    with open(path, encoding="utf-8", errors="replace") as file:
+        text = file.read().strip()
+    if len(text) < 80:
+        raise UnsupportedFormat("в файле почти нет текста")
     return text
 
 

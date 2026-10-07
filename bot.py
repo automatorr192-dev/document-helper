@@ -27,7 +27,15 @@ import analyzer
 import generator
 import ocr
 import quota
-from extract import ScannedPdfError, image_data_url, pdf_text
+from extract import (
+    ScannedPdfError,
+    UnsupportedFormat,
+    docx_text,
+    image_data_url,
+    kind,
+    pdf_text,
+    plain_text,
+)
 from observability import log, setup
 from prompts import DISCLAIMER, DOC_TYPES
 from schema import Report
@@ -117,7 +125,7 @@ async def to_menu(cb: CallbackQuery, state: FSMContext):
 async def check(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Flow.awaiting_doc)
     await cb.message.answer(
-        "Пришли договор — <b>текстом</b>, <b>PDF-файлом</b> или <b>фото страниц</b>. "
+        "Пришли договор — <b>текстом</b>, <b>PDF</b>, <b>Word (.docx)</b> или <b>фото страниц</b>. "
         "Разберу по косточкам."
     )
     await cb.answer()
@@ -205,18 +213,31 @@ async def analyze_document(message: Message):
     if (message.document.file_size or 0) > MAX_DOC_BYTES:
         await message.answer("Файл больше 10 МБ. Пришли договор одним PDF поменьше.")
         return
+    fmt = kind(message.document.file_name)
+    if fmt == "doc":
+        await message.answer(
+            "Это старый формат .doc. Открой его в Word и сохрани как .docx или PDF — тогда разберу."
+        )
+        return
     if not await _quota(message, "analyze"):
         return
-    path = await _download(message.bot, message.document.file_id, ".pdf")
+    path = await _download(message.bot, message.document.file_id, f".{fmt}")
     try:
         try:
-            # pdfplumber синхронный: в event loop он вешает и бота, и веб-часть процесса.
-            text = await asyncio.to_thread(pdf_text, path)
+            if fmt == "docx":
+                text = await asyncio.to_thread(docx_text, path)
+            elif fmt == "txt":
+                text = await asyncio.to_thread(plain_text, path)
+            else:
+                text = await asyncio.to_thread(pdf_text, path)
         except ScannedPdfError:
             await message.answer("Внутри скан, текста нет — распознаю страницы, это дольше…")
             text, _ = await ocr.text_from_scan(path)
     except ScannedPdfError:
         await message.answer("На страницах не нашлось текста — разбирать нечего.")
+        return
+    except UnsupportedFormat as e:
+        await message.answer(f"Не смог прочитать файл: {e}. Пришли PDF, Word или фото.")
         return
     except RuntimeError as e:
         await message.answer(f"Не смог распознать скан ({e}). Попробуй ещё раз.")
