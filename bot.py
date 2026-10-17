@@ -41,7 +41,7 @@ from extract import (
     plain_text,
 )
 from observability import log, setup
-from prompts import DISCLAIMER, DOC_TYPES
+from prompts import DISCLAIMER, DOC_TYPES, UNAVAILABLE
 from schema import Report
 from storage import FileStorage
 
@@ -216,7 +216,8 @@ async def _run_analysis(message: Message, coro):
         try:
             report, replies = await coro
         except RuntimeError as e:
-            await message.answer(f"ИИ временно недоступен ({e}). Попробуй ещё раз.")
+            log.warning("llm.unavailable", error=str(e))
+            await message.answer(UNAVAILABLE)
             return
     log.info(
         "analyze.done",
@@ -351,7 +352,8 @@ async def _run_fields(message: Message, coro) -> None:
         try:
             card, replies = await coro
         except RuntimeError as e:
-            await message.answer(f"ИИ временно недоступен ({e}). Попробуй ещё раз.")
+            log.warning("llm.unavailable", error=str(e))
+            await message.answer(UNAVAILABLE)
             return
     log.info(
         "fields.done",
@@ -395,7 +397,8 @@ async def collect_brief(message: Message, state: FSMContext):
         try:
             body = await generator.generate_body(data["doc_label"], brief)
         except RuntimeError as e:
-            await message.answer(f"ИИ временно недоступен ({e}). Попробуй ещё раз.")
+            log.warning("llm.unavailable", error=str(e))
+            await message.answer(UNAVAILABLE)
             return
         out = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         out.close()

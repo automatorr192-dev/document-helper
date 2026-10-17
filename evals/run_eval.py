@@ -28,6 +28,16 @@ PRICE_RUB_PER_MTOK = {"input": 240.0, "output": 1200.0}
 
 def load_cases(limit: int | None) -> list[dict]:
     cases = [json.loads(line) for line in CASES.read_text("utf-8").splitlines() if line.strip()]
+    # Договоры-PDF лежат вне git. Нет файла — кейс пропускаем и говорим об этом, а не
+    # засчитываем провалом: иначе точность врёт о продукте, а не о датасете.
+    missing = [
+        c["id"]
+        for c in cases
+        if "pdf" in c["input"] and not (HERE.parent / c["input"]["pdf"]).exists()
+    ]
+    if missing:
+        print(f"Пропущены, нет PDF на этой машине: {', '.join(missing)}")
+    cases = [c for c in cases if c["id"] not in missing]
     return cases[:limit] if limit else cases
 
 

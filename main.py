@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import analyzer
 import bot as tg
 import generator
+import maxbot
 import ocr
 import prompts
 import protocol
@@ -66,12 +67,15 @@ async def _supervise_bot():
 async def lifespan(app: FastAPI):
     # Бот живёт фоновой задачей внутри веб-приложения: в Amvera каждое приложение
     # тарифицируется отдельно, поэтому веб и бот делят один контейнер.
-    task = asyncio.create_task(_supervise_bot())
+    tasks = [asyncio.create_task(_supervise_bot())]
+    if maxbot.enabled():
+        tasks.append(asyncio.create_task(maxbot.run()))
     yield
-    task.cancel()
-    # Дожидаемся отмены: без этого aiogram не успевает закрыть сессию и оборвать polling.
-    with suppress(asyncio.CancelledError):
-        await task
+    for task in tasks:
+        task.cancel()
+        # Дожидаемся отмены: без этого aiogram не успевает закрыть сессию и оборвать polling.
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(title="Документ-хелпер", lifespan=lifespan)
@@ -180,7 +184,8 @@ async def api_analyze(body: AnalyzeIn):
     try:
         report, replies = await analyzer.analyze(text[:MAX_TEXT_CHARS])
     except RuntimeError as e:
-        raise HTTPException(503, f"ИИ временно недоступен ({e}). Попробуй ещё раз.") from e
+        log.warning("llm.unavailable", error=str(e))
+        raise HTTPException(503, prompts.UNAVAILABLE) from e
 
     cost = sum(r.cost for r in replies)
     log.info(
@@ -238,7 +243,8 @@ async def api_analyze_stream(body: AnalyzeIn):
                 yield _sse(event["type"], event["data"])
         except Exception as e:
             log.exception("analyze.stream_failed", user_id=user.get("id"))
-            yield _sse("error", {"detail": f"ИИ временно недоступен ({e}). Попробуй ещё раз."})
+            log.warning("llm.unavailable", error=str(e))
+            yield _sse("error", {"detail": prompts.UNAVAILABLE})
 
     return StreamingResponse(
         events(),
@@ -258,7 +264,8 @@ async def api_fields(body: AnalyzeIn):
     try:
         card, replies = await analyzer.extract(body.text[:MAX_TEXT_CHARS])
     except RuntimeError as e:
-        raise HTTPException(503, f"ИИ временно недоступен ({e}).") from e
+        log.warning("llm.unavailable", error=str(e))
+        raise HTTPException(503, prompts.UNAVAILABLE) from e
     log.info(
         "fields.done",
         user_id=user.get("id"),
