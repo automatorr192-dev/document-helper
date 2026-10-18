@@ -11,8 +11,13 @@ def _models(env_key: str, default: str) -> list[str]:
     return [m.strip() for m in os.environ.get(env_key, default).split(",") if m.strip()]
 
 
-MODELS = _models("MODELS", "anthropic/claude-sonnet-5,anthropic/claude-sonnet-4.6")
-MODELS_LIGHT = _models("MODELS_LIGHT", "anthropic/claude-haiku-4.5")
+# По умолчанию — бесплатные модели OpenRouter, последней — копеечная платная. Для продакшена
+# с деньгами на счету качество выше у Claude Sonnet: MODELS=anthropic/claude-sonnet-5,...
+MODELS = _models("MODELS", "nvidia/nemotron-3.5-super-vl:free,nvidia/nemotron-3-super-120b-a12b:free,deepseek/deepseek-v4-flash")
+# Распознавание сканов и проверка брифа: нужна модель со зрением.
+MODELS_LIGHT = _models("MODELS_LIGHT", "nvidia/nemotron-3.5-super-vl:free,anthropic/claude-haiku-4.5")
+# Reasoning-модели тратят часть потолка ответа на размышление: добавляем запас к каждому вызову.
+REASONING_HEADROOM = int(os.environ.get("REASONING_HEADROOM", 6000))
 
 # Доллары за миллион токенов (вход, выход) по первой подходящей приставке.
 PRICE_USD = {
@@ -84,7 +89,7 @@ async def stream(system: str, content, models: list[str], max_tokens: int = 2500
         try:
             response = await client.chat.completions.create(
                 model=model,
-                max_tokens=max_tokens,
+                max_tokens=max_tokens + REASONING_HEADROOM,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": content},
@@ -127,7 +132,7 @@ async def chat(system: str, content, models: list[str], max_tokens: int = 2500) 
         try:
             resp = await client.chat.completions.create(
                 model=model,
-                max_tokens=max_tokens,
+                max_tokens=max_tokens + REASONING_HEADROOM,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": content},
