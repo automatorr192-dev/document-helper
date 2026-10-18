@@ -13,9 +13,15 @@ def _models(env_key: str, default: str) -> list[str]:
 
 # По умолчанию — бесплатные модели OpenRouter, последней — копеечная платная. Для продакшена
 # с деньгами на счету качество выше у Claude Sonnet: MODELS=anthropic/claude-sonnet-5,...
-MODELS = _models("MODELS", "nvidia/nemotron-3.5-super-vl:free,nvidia/nemotron-3-super-120b-a12b:free,deepseek/deepseek-v4-flash")
+MODELS = _models(
+    "MODELS",
+    "nvidia/nemotron-3.5-super-vl:free,nvidia/nemotron-3-super-120b-a12b:free,"
+    "deepseek/deepseek-v4-flash",
+)
 # Распознавание сканов и проверка брифа: нужна модель со зрением.
-MODELS_LIGHT = _models("MODELS_LIGHT", "nvidia/nemotron-3.5-super-vl:free,anthropic/claude-haiku-4.5")
+MODELS_LIGHT = _models(
+    "MODELS_LIGHT", "nvidia/nemotron-3.5-super-vl:free,anthropic/claude-haiku-4.5"
+)
 # Reasoning-модели тратят часть потолка ответа на размышление: добавляем запас к каждому вызову.
 REASONING_HEADROOM = int(os.environ.get("REASONING_HEADROOM", 6000))
 
