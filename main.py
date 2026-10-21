@@ -1,10 +1,13 @@
 import asyncio
+import hmac
 import json
 import os
 import tempfile
+from collections import deque
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from aiogram.types import Update
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,7 +37,11 @@ DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", 5))
 EXTRACT_LIMIT = int(os.environ.get("EXTRACT_LIMIT", 30))
 SHARE_LIMIT = int(os.environ.get("SHARE_LIMIT", 20))
 # Адрес, по которому приложение видно снаружи: из него собирается ссылка на отчёт.
-PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
+# Render подставляет его сам.
+PUBLIC_URL = (os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL", "")).rstrip("/")
+# Задан вместе с адресом — бот на вебхуке: бесплатный Render усыпляет приложение без входящих
+# запросов, и будит его сам Telegram, когда человек пишет боту. Без него — long polling.
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
 
 class AnalyzeIn(BaseModel):
@@ -63,11 +70,31 @@ async def _supervise_bot():
             await asyncio.sleep(5)
 
 
+async def _hook(bot) -> None:
+    try:
+        await tg.introduce(bot)
+        # Без drop_pending_updates: приложение будит как раз то сообщение, что ждёт в очереди.
+        await bot.set_webhook(
+            f"{PUBLIC_URL}/telegram",
+            secret_token=WEBHOOK_SECRET,
+            allowed_updates=tg.dp.resolve_used_update_types(),
+        )
+    except Exception:
+        # Telegram недоступен на старте — мини-апп и ссылки на отчёты всё равно должны жить.
+        log.exception("bot.webhook_failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Бот живёт фоновой задачей внутри веб-приложения: в Amvera каждое приложение
-    # тарифицируется отдельно, поэтому веб и бот делят один контейнер.
-    tasks = [asyncio.create_task(_supervise_bot())]
+    # Бот живёт внутри веб-приложения: в Amvera каждое приложение тарифицируется отдельно,
+    # а на Render бесплатный сервис один на всё.
+    tasks = []
+    app.state.bot = None
+    if WEBHOOK_SECRET and PUBLIC_URL:
+        app.state.bot = tg.make_bot()
+        await _hook(app.state.bot)
+    else:
+        tasks.append(asyncio.create_task(_supervise_bot()))
     if maxbot.enabled():
         tasks.append(asyncio.create_task(maxbot.run()))
     yield
@@ -76,6 +103,8 @@ async def lifespan(app: FastAPI):
         # Дожидаемся отмены: без этого aiogram не успевает закрыть сессию и оборвать polling.
         with suppress(asyncio.CancelledError):
             await task
+    if app.state.bot is not None:
+        await app.state.bot.session.close()
 
 
 app = FastAPI(title="Документ-хелпер", lifespan=lifespan)
@@ -98,6 +127,30 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+_handling: set[asyncio.Task] = set()
+_seen: deque[int] = deque(maxlen=1000)
+
+
+@app.post("/telegram")
+async def telegram_update(request: Request):
+    bot = getattr(request.app.state, "bot", None)
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if bot is None or not hmac.compare_digest(secret, WEBHOOK_SECRET):
+        raise HTTPException(403, "Forbidden")
+    update = Update.model_validate(await request.json(), context={"bot": bot})
+    # Пока бесплатный Render просыпается, Telegram может не дождаться ответа и прислать то же
+    # обновление ещё раз — второй раз его не обрабатываем.
+    if update.update_id in _seen:
+        return {"ok": True}
+    _seen.append(update.update_id)
+    # Разбор договора идёт минуты, а ответа на вебхук Telegram ждёт секунды: отвечаем сразу,
+    # обрабатываем фоном. Ссылку на задачу держим, иначе её соберёт сборщик мусора.
+    task = asyncio.create_task(tg.dp.feed_update(bot, update))
+    _handling.add(task)
+    task.add_done_callback(_handling.discard)
+    return {"ok": True}
 
 
 def _user(init_data: str) -> dict:

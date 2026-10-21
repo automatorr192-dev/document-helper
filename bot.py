@@ -81,7 +81,8 @@ class Flow(StatesGroup):
     gen_brief = State()
 
 
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "")
+# На Render мини-апп раздаёт то же приложение, поэтому его адрес — адрес сервиса.
+WEBAPP_URL = os.environ.get("WEBAPP_URL") or os.environ.get("RENDER_EXTERNAL_URL", "")
 
 
 def menu_kb() -> InlineKeyboardMarkup:
@@ -437,14 +438,22 @@ async def on_error(event: ErrorEvent) -> bool:
     return True
 
 
-async def main():
-    bot = Bot(
+def make_bot() -> Bot:
+    return Bot(
         os.environ["TELEGRAM_BOT_TOKEN"],
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
+
+async def introduce(bot: Bot) -> None:
     await bot.set_my_commands([BotCommand(command="start", description="В меню")])
     await bot.set_my_description(description=DESCRIPTION)
     await bot.set_my_short_description(short_description=SHORT_DESCRIPTION)
+
+
+async def main():
+    bot = make_bot()
+    await introduce(bot)
     try:
         # drop_pending_updates: после долгого простоя Telegram отдаёт всё накопленное, и бот
         # начинает отвечать на вчерашние нажатия. Заодно снимает чужой вебхук — иначе 409.

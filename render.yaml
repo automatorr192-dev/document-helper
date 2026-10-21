@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: document-helper
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    dockerCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # С ним бот на вебхуке: спящий сервис будит сам Telegram. Адрес Render подставит сам.
+      - key: WEBHOOK_SECRET
+        generateValue: true
