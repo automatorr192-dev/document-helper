@@ -46,8 +46,30 @@ def _json(raw: str) -> dict:
     return json.loads(raw[raw.index("{") : raw.rindex("}") + 1])
 
 
+SALVAGED = (
+    "Модель прислала ответ с ошибкой в разметке, поэтому общий вывод не собрался. "
+    "Ниже пункты, которые удалось разобрать."
+)
+
+
 def _parse(raw: str) -> Report:
-    return Report.model_validate(_json(raw))
+    try:
+        return Report.model_validate(_json(raw))
+    except json.JSONDecodeError:
+        return _salvage(raw)
+
+
+def _salvage(raw: str) -> Report:
+    """Бесплатные модели иногда ломают JSON — чаще всего теряют запятую между пунктами. Сами
+    пункты при этом обычно целы: собираем их тем же разбором, что и поток, вместо того чтобы
+    после минут ожидания показать «ИИ недоступен». Нет ни одного целого пункта — ошибка."""
+    findings = []
+    for item in findings_so_far(raw, 0)[0]:
+        with suppress(ValidationError):
+            findings.append(Finding.model_validate(item))
+    if not findings:
+        raise ValueError("в ответе нет ни одного целого пункта")
+    return Report(summary=SALVAGED, findings=findings)
 
 
 def _anchor(findings: list[Finding], text: str) -> tuple[list[Finding], list[Finding]]:

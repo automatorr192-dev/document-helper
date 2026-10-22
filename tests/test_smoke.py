@@ -69,3 +69,21 @@ def test_cost_counts_rubles():
     assert cost_rub("anthropic/claude-sonnet-5", 1_000_000, 0) == 240.0
     assert cost_rub("anthropic/claude-sonnet-5", 0, 1_000_000) == 1200.0
     assert cost_rub("mistral/whatever", 1_000_000, 1_000_000) == 0.0
+
+
+BROKEN = """{"summary": "s", "findings": [
+  {"quote": "односторонний отказ", "severity": "red", "title": "Отказ", "plain": "p"}
+  {"quote": "пени 1% в день", "severity": "yellow", "title": "Пени", "plain": "p"}
+], "actions": []}"""
+
+
+def test_broken_json_keeps_intact_findings():
+    # Бесплатная модель потеряла запятую между пунктами — сами пункты целы.
+    report = _parse(BROKEN)
+    assert [f.title for f in report.findings] == ["Отказ", "Пени"]
+    assert report.verdict == "2 ловушки, 1 критичная"
+
+
+def test_answer_without_a_single_intact_finding_is_still_an_error():
+    with pytest.raises(ValueError):
+        _parse('{"summary": "s", "findings": [{"quote": "обрыв')
